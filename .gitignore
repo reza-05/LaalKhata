@@ -13,3 +13,7 @@ ios/Flutter/flutter_export_environment.sh
 
 .DS_Store
 *.iml
+
+# Local secrets and environment files
+.env
+.env.json
