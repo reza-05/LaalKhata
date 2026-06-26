@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/errors/app_failure.dart';
+import '../../../../core/services/biometric_auth_service.dart';
 import '../../data/supabase_auth_repository.dart';
 import '../../domain/auth_repository.dart';
 import 'auth_state.dart';
@@ -12,6 +13,10 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 final authControllerProvider =
     StateNotifierProvider<AuthController, AuthState>((ref) {
   return AuthController(ref.watch(authRepositoryProvider))..loadSession();
+});
+
+final biometricAuthServiceProvider = Provider<BiometricAuthService>((ref) {
+  return BiometricAuthService();
 });
 
 class AuthController extends StateNotifier<AuthState> {
@@ -112,6 +117,25 @@ class AuthController extends StateNotifier<AuthState> {
 
   String _friendlyError(Object error) {
     if (error is AppFailure) return error.message;
-    return error.toString().replaceFirst('Exception: ', '');
+
+    final raw = error.toString().replaceFirst('Exception: ', '');
+    final normalized = raw.toLowerCase();
+
+    if (normalized.contains('invalid login credentials') ||
+        normalized.contains('invalid_credentials') ||
+        normalized.contains('user not found')) {
+      return 'No matching account found. Please check your password or create an account.';
+    }
+
+    if (normalized.contains('email not confirmed')) {
+      return 'Please confirm your IUT email before logging in.';
+    }
+
+    if (normalized.contains('already registered') ||
+        normalized.contains('user already registered')) {
+      return 'An account already exists with this IUT email. Please log in instead.';
+    }
+
+    return 'Something went wrong. Please try again.';
   }
 }
