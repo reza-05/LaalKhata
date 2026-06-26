@@ -123,6 +123,32 @@ class SmsSuggestionManager
     return added;
   }
 
+  Future<List<SmsBalanceSuggestion>> detectLatestBalances({
+    required Iterable<RawSmsMessage> messages,
+  }) async {
+    final latest = <SmsFinancialProvider, SmsBalanceSuggestion>{};
+
+    for (final message in messages) {
+      final parsed = _parser.parse(message);
+      final balance = parsed?.newBalance;
+      if (parsed == null || balance == null || balance < 0) continue;
+
+      final previous = latest[parsed.provider];
+      if (previous == null || parsed.occurredAt.isAfter(previous.detectedAt)) {
+        latest[parsed.provider] = SmsBalanceSuggestion(
+          provider: parsed.provider,
+          sourceName: parsed.provider.defaultSourceName,
+          balance: balance,
+          detectedAt: parsed.occurredAt,
+        );
+      }
+    }
+
+    final values = latest.values.toList()
+      ..sort((a, b) => b.detectedAt.compareTo(a.detectedAt));
+    return values;
+  }
+
   Future<void> updateSuggestion(SmsTransactionSuggestion suggestion) async {
     state = [
       for (final item in state)

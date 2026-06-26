@@ -181,3 +181,17 @@ class SmsTransactionSuggestion {
     return null;
   }
 }
+
+class SmsBalanceSuggestion {
+  const SmsBalanceSuggestion({
+    required this.provider,
+    required this.sourceName,
+    required this.balance,
+    required this.detectedAt,
+  });
+
+  final SmsFinancialProvider provider;
+  final String sourceName;
+  final double balance;
+  final DateTime detectedAt;
+}
