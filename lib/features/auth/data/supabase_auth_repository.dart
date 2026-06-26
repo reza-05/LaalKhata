@@ -32,6 +32,7 @@ class SupabaseAuthRepository implements AuthRepository {
     final response = await _client.auth.signUp(
       email: email.trim().toLowerCase(),
       password: password,
+      emailRedirectTo: 'laalkhata://auth-callback',
       data: {
         'display_name': displayName.trim(),
         'role': role,
@@ -70,6 +71,18 @@ class SupabaseAuthRepository implements AuthRepository {
 
     await _client.auth.resetPasswordForEmail(
       email.trim().toLowerCase(),
+      redirectTo: 'laalkhata://auth-callback',
+    );
+  }
+
+  @override
+  Future<void> updatePassword({
+    required String password,
+  }) async {
+    _ensureConfigured();
+
+    await _client.auth.updateUser(
+      UserAttributes(password: password),
     );
   }
 

@@ -66,10 +66,10 @@ class _ModeButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           boxShadow: selected
               ? [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
+                  const BoxShadow(
+                    color: AppColors.subtleShadow,
+                    blurRadius: 18,
+                    offset: Offset(0, 8),
                   ),
                 ]
               : null,
@@ -78,7 +78,7 @@ class _ModeButton extends StatelessWidget {
           label,
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: selected ? AppColors.burgundy : AppColors.mutedInk,
+            color: selected ? AppColors.primary : AppColors.mutedInk,
             fontWeight: FontWeight.w800,
           ),
         ),

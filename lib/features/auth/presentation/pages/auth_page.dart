@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/services/password_recovery_signal.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/auth_validator.dart';
 import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
 import '../widgets/laalkhata_mark.dart';
+import 'reset_password_request_page.dart';
 
 enum _AccountRole {
   student('Student'),
@@ -118,7 +120,11 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                               if (widget.setupNotice != null) ...[
                                 _MessageBanner(
                                   message: widget.setupNotice!,
-                                  color: AppColors.warning,
+                                  color: widget.setupNotice!
+                                          .toLowerCase()
+                                          .contains('confirmed')
+                                      ? AppColors.positive
+                                      : AppColors.warning,
                                 ),
                                 const SizedBox(height: 14),
                               ],
@@ -161,8 +167,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                   borderRadius: BorderRadius.circular(16),
                                   decoration: const InputDecoration(
                                     labelText: 'Account type',
-                                    prefixIcon:
-                                        Icon(Icons.school_outlined),
+                                    prefixIcon: Icon(Icons.school_outlined),
                                   ),
                                   items: _AccountRole.values
                                       .map(
@@ -204,7 +209,8 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                         child: _TextField(
                                           controller: _studentIdController,
                                           label: 'Student ID',
-                                          icon: Icons.confirmation_number_outlined,
+                                          icon: Icons
+                                              .confirmation_number_outlined,
                                           textInputAction: TextInputAction.next,
                                           validator: (value) =>
                                               AuthValidator.validateRequired(
@@ -274,14 +280,15 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                   child: TextButton(
                                     onPressed: isLoading
                                         ? null
-                                        : _sendPasswordReset,
+                                        : _openResetPasswordPage,
                                     child: const Text('Forgot password?'),
                                   ),
                                 ),
                               ],
                               if (_isSignUp) ...[
                                 const SizedBox(height: 10),
-                                _PasswordHint(password: _passwordController.text),
+                                _PasswordHint(
+                                    password: _passwordController.text),
                               ],
                               const SizedBox(height: 22),
                               ElevatedButton(
@@ -295,9 +302,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                         ),
                                       )
                                     : Text(
-                                        _isSignUp
-                                            ? 'Create account'
-                                            : 'Login',
+                                        _isSignUp ? 'Create account' : 'Login',
                                       ),
                               ),
                               if (!_isSignUp) ...[
@@ -307,13 +312,13 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                   icon: const Icon(Icons.fingerprint_rounded),
                                   label: const Text('Login with fingerprint'),
                                   style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppColors.burgundy,
-                                    minimumSize: const Size.fromHeight(52),
+                                    foregroundColor: AppColors.primary,
+                                    minimumSize: const Size.fromHeight(54),
                                     side: const BorderSide(
                                       color: AppColors.line,
                                     ),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(16),
+                                      borderRadius: BorderRadius.circular(18),
                                     ),
                                   ),
                                 ),
@@ -351,6 +356,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
 
+    PasswordRecoverySignal.clearAuthNotice();
     final controller = ref.read(authControllerProvider.notifier);
     if (_isSignUp) {
       controller.signUp(
@@ -358,12 +364,10 @@ class _AuthPageState extends ConsumerState<AuthPage> {
         password: _passwordController.text,
         displayName: _nameController.text,
         role: _role.label,
-        department: _role == _AccountRole.staff
-            ? ''
-            : _departmentController.text,
-        studentId: _role == _AccountRole.student
-            ? _studentIdController.text
-            : null,
+        department:
+            _role == _AccountRole.staff ? '' : _departmentController.text,
+        studentId:
+            _role == _AccountRole.student ? _studentIdController.text : null,
         batch: _role == _AccountRole.student ? _batchController.text : null,
       );
       return;
@@ -385,18 +389,12 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     );
   }
 
-  void _sendPasswordReset() {
-    final emailMessage = AuthValidator.validateIutEmail(_emailController.text);
-    if (emailMessage != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(emailMessage)),
-      );
-      return;
-    }
-
-    ref.read(authControllerProvider.notifier).sendPasswordReset(
-          email: _emailController.text,
-        );
+  void _openResetPasswordPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const ResetPasswordRequestPage(),
+      ),
+    );
   }
 }
 
@@ -411,13 +409,13 @@ class _AuthPanel extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: AppColors.card,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
         border: Border.all(color: AppColors.line),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 24,
-            offset: const Offset(0, 14),
+          const BoxShadow(
+            color: AppColors.subtleShadow,
+            blurRadius: 28,
+            offset: Offset(0, 16),
           ),
         ],
       ),
@@ -501,9 +499,8 @@ class _PasswordHint extends StatelessWidget {
               child: Text(
                 check.label,
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: check.passed
-                          ? AppColors.income
-                          : AppColors.mutedInk,
+                      color:
+                          check.passed ? AppColors.income : AppColors.mutedInk,
                       fontWeight: FontWeight.w800,
                     ),
               ),

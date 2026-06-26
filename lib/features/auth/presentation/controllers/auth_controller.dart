@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/errors/app_failure.dart';
 import '../../../../core/services/biometric_auth_service.dart';
+import '../../../../core/services/local_pin_service.dart';
 import '../../data/supabase_auth_repository.dart';
 import '../../domain/auth_repository.dart';
 import 'auth_state.dart';
@@ -19,6 +21,10 @@ final biometricAuthServiceProvider = Provider<BiometricAuthService>((ref) {
   return BiometricAuthService();
 });
 
+final localPinServiceProvider = Provider<LocalPinService>((ref) {
+  return LocalPinService();
+});
+
 class AuthController extends StateNotifier<AuthState> {
   AuthController(this._repository) : super(const AuthState.idle());
 
@@ -27,7 +33,8 @@ class AuthController extends StateNotifier<AuthState> {
   void loadSession() {
     final user = _repository.currentUser;
     state = AuthState(
-      status: user == null ? AuthStatus.unauthenticated : AuthStatus.authenticated,
+      status:
+          user == null ? AuthStatus.unauthenticated : AuthStatus.authenticated,
       user: user,
     );
   }
@@ -76,9 +83,12 @@ class AuthController extends StateNotifier<AuthState> {
       await _repository.signIn(email: email, password: password);
       loadSession();
     } catch (error) {
+      if (kDebugMode) {
+        debugPrint('Password reset request failed: $error');
+      }
       state = AuthState(
         status: AuthStatus.error,
-        message: _friendlyError(error),
+        message: _friendlyPasswordResetError(error),
       );
     }
   }
@@ -96,6 +106,26 @@ class AuthController extends StateNotifier<AuthState> {
     } catch (error) {
       state = AuthState(
         status: AuthStatus.error,
+        message: _friendlyError(error),
+      );
+    }
+  }
+
+  Future<void> updatePassword({
+    required String password,
+  }) async {
+    state = state.copyWith(status: AuthStatus.loading, message: null);
+    try {
+      await _repository.updatePassword(password: password);
+      loadSession();
+      state = state.copyWith(
+        status: AuthStatus.authenticated,
+        message: 'Password updated successfully.',
+      );
+    } catch (error) {
+      state = AuthState(
+        status: AuthStatus.error,
+        user: state.user,
         message: _friendlyError(error),
       );
     }
@@ -131,11 +161,50 @@ class AuthController extends StateNotifier<AuthState> {
       return 'Please confirm your IUT email before logging in.';
     }
 
+    if (normalized.contains('session') ||
+        normalized.contains('expired') ||
+        normalized.contains('not found')) {
+      return 'This recovery session is no longer valid. Please request a new password reset link.';
+    }
+
     if (normalized.contains('already registered') ||
         normalized.contains('user already registered')) {
       return 'An account already exists with this IUT email. Please log in instead.';
     }
 
     return 'Something went wrong. Please try again.';
+  }
+
+  String _friendlyPasswordResetError(Object error) {
+    if (error is AppFailure) return error.message;
+
+    final raw = error.toString().replaceFirst('Exception: ', '');
+    final normalized = raw.toLowerCase();
+
+    if (normalized.contains('redirect') ||
+        normalized.contains('not allowed') ||
+        normalized.contains('invalid url') ||
+        normalized.contains('uri')) {
+      return 'Password reset could not be sent. Please check the Supabase redirect URL settings and try again.';
+    }
+
+    if (normalized.contains('rate') ||
+        normalized.contains('too many') ||
+        normalized.contains('limit')) {
+      return 'Too many reset requests. Please wait a few minutes before trying again.';
+    }
+
+    if (normalized.contains('network') ||
+        normalized.contains('socket') ||
+        normalized.contains('connection') ||
+        normalized.contains('timeout')) {
+      return 'Network connection failed. Please check your internet and try again.';
+    }
+
+    if (normalized.contains('email')) {
+      return 'Password reset could not be sent to this email. Please check the address and try again.';
+    }
+
+    return 'Password reset could not be sent right now. Please try again.';
   }
 }

@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/services/password_recovery_signal.dart';
 import '../../../../core/services/supabase_service.dart';
 import '../controllers/auth_controller.dart';
 import '../controllers/auth_state.dart';
 import 'auth_page.dart';
-import 'biometric_unlock_page.dart';
 import 'phase_one_home_page.dart';
+import 'pin_setup_page.dart';
+import 'pin_unlock_page.dart';
+import 'update_password_page.dart';
 
 class AuthGate extends ConsumerStatefulWidget {
   const AuthGate({super.key});
@@ -17,16 +20,18 @@ class AuthGate extends ConsumerStatefulWidget {
 
 class _AuthGateState extends ConsumerState<AuthGate>
     with WidgetsBindingObserver {
-  bool _biometricUnlocked = false;
+  bool _localUnlocked = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    PasswordRecoverySignal.authEventVersion.addListener(_handleAuthEvent);
   }
 
   @override
   void dispose() {
+    PasswordRecoverySignal.authEventVersion.removeListener(_handleAuthEvent);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -36,12 +41,20 @@ class _AuthGateState extends ConsumerState<AuthGate>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
-      if (_biometricUnlocked) {
+      if (_localUnlocked) {
         setState(() {
-          _biometricUnlocked = false;
+          _localUnlocked = false;
         });
       }
     }
+  }
+
+  void _handleAuthEvent() {
+    ref.read(authControllerProvider.notifier).loadSession();
+    if (PasswordRecoverySignal.isActive.value) {
+      _localUnlocked = false;
+    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -55,18 +68,45 @@ class _AuthGateState extends ConsumerState<AuthGate>
       );
     }
 
+    return ValueListenableBuilder<bool>(
+      valueListenable: PasswordRecoverySignal.isActive,
+      builder: (context, isPasswordRecovery, _) {
+        if (isPasswordRecovery) {
+          return const UpdatePasswordPage();
+        }
+
+        return _buildAuthContent(authState);
+      },
+    );
+  }
+
+  Widget _buildAuthContent(AuthState authState) {
     if (authState.status == AuthStatus.authenticated) {
       return FutureBuilder<bool>(
-        future: ref
-            .read(biometricAuthServiceProvider)
-            .isFingerprintEnabled(),
+        future: ref.read(localPinServiceProvider).isPinSet(),
         builder: (context, snapshot) {
-          final enabled = snapshot.data ?? false;
-          if (enabled && !_biometricUnlocked) {
-            return BiometricUnlockPage(
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+
+          final hasPin = snapshot.data ?? false;
+          if (!hasPin) {
+            return PinSetupPage(
+              onCompleted: () {
+                setState(() {
+                  _localUnlocked = true;
+                });
+              },
+            );
+          }
+
+          if (!_localUnlocked) {
+            return PinUnlockPage(
               onUnlocked: () {
                 setState(() {
-                  _biometricUnlocked = true;
+                  _localUnlocked = true;
                 });
               },
             );
@@ -77,6 +117,16 @@ class _AuthGateState extends ConsumerState<AuthGate>
       );
     }
 
-    return const AuthPage();
+    if (_localUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          setState(() {
+            _localUnlocked = false;
+          });
+        }
+      });
+    }
+
+    return AuthPage(setupNotice: PasswordRecoverySignal.authNotice.value);
   }
 }

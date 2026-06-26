@@ -15,17 +15,11 @@ class LaalKhataMark extends StatelessWidget {
             'LaalKhata',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                  color: AppColors.burgundy,
-                  fontSize: 46,
+                  color: AppColors.primary,
+                  fontSize: 44,
                   fontWeight: FontWeight.w900,
-                  height: 0.95,
-                  shadows: [
-                    Shadow(
-                      color: AppColors.burgundy.withValues(alpha: 0.18),
-                      blurRadius: 0,
-                      offset: const Offset(0.8, 0),
-                    ),
-                  ],
+                  height: 0.98,
+                  letterSpacing: 0,
                 ),
           ),
           const SizedBox(height: 8),
@@ -34,7 +28,7 @@ class LaalKhataMark extends StatelessWidget {
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: AppColors.mutedInk,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                   height: 1.25,
                 ),
           ),

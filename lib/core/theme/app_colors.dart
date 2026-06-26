@@ -1,13 +1,22 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  static const burgundy = Color(0xFF800020);
-  static const ivory = Color(0xFFFDFBF7);
-  static const ink = Color(0xFF1F1B18);
-  static const mutedInk = Color(0xFF6E625B);
-  static const line = Color(0xFFE9DFD6);
+  static const primary = Color(0xFFD32F2F);
+  static const primaryDark = Color(0xFFB71C1C);
+  static const accent = Color(0xFFEF5350);
+  static const background = Color(0xFFFFFFFF);
+  static const altSurface = Color(0xFFF6FAFF);
+  static const positive = Color(0xFF22C55E);
+  static const danger = Color(0xFFDC2626);
+  static const warning = Color(0xFFF59E0B);
+
+  static const burgundy = primary;
+  static const ivory = background;
+  static const ink = Color(0xFF1F2937);
+  static const mutedInk = Color(0xFF6B7280);
+  static const line = Color(0xFFE5E7EB);
   static const card = Color(0xFFFFFFFF);
-  static const income = Color(0xFF2E7D32);
-  static const expense = Color(0xFFC62828);
-  static const warning = Color(0xFFE8A23A);
+  static const subtleShadow = Color(0x1A111827);
+  static const income = positive;
+  static const expense = danger;
 }
