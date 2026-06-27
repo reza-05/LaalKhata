@@ -17,6 +17,16 @@
 5. In Authentication email templates/settings, keep email confirmation enabled for real users. For quick local testing you may temporarily disable confirm email, then enable it again.
 6. Add your site/app redirect URLs later when deep links are added.
 
+If the auth schema was installed before cloud ledger sync was added, run only:
+
+```text
+supabase/migrations/20260627_ledger_snapshots.sql
+```
+
+This creates the per-user `ledger_snapshots` table and its Row Level Security
+policies. Without this migration, balances remain safely local but cannot be
+restored after clearing app data or signing in on another device.
+
 ## Local Android test with Supabase in VS Code
 
 Get these from Supabase Project Settings -> API:
@@ -66,10 +76,10 @@ flutter run \
 
 Without `.env.json` values, the UI still opens but sign-in is disabled with a setup notice.
 
-## Phase 2 handoff
+## Ledger behavior
 
-After auth is verified, build wallet initialization:
-
-- `wallets`: Cash, bKash, Nagad, AB Bank.
-- `transactions`: confirmed income/expense/transfer records.
-- `pending_sms_logs`: Android SMS parse buffer that does not alter balance.
+- Ledger data is written locally first.
+- The complete per-user snapshot is then synced to Supabase.
+- Pending and ignored SMS suggestions remain local and are never uploaded.
+- Raw SMS bodies and senders are never uploaded.
+- Transactions are only scanned after the opening-balance cutoff time.

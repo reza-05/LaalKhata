@@ -1,14 +1,13 @@
-import 'dart:convert';
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../../../core/services/biometric_auth_service.dart';
+import '../../../../core/services/ledger_snapshot_repository.dart';
 import '../../../../core/services/local_pin_service.dart';
-import '../../../../core/services/supabase_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../sms/data/sms_suggestion_manager.dart';
 import '../../../sms/domain/balance_initializer.dart';
@@ -25,13 +24,18 @@ class PhaseOneHomePage extends ConsumerStatefulWidget {
 
 class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     with WidgetsBindingObserver {
-  static const _storage = FlutterSecureStorage();
+  final _ledgerRepository = LedgerSnapshotRepository();
 
   int _selectedIndex = 0;
   bool _balanceVisible = false;
   bool _isLedgerLoading = true;
   bool _hasAutoScannedBalance = false;
   bool _isAutoScanningTransactions = false;
+  bool _hasHandledSmsPermission = false;
+  bool _cloudSyncAvailable = true;
+  DateTime? _smsTransactionCutoffAt;
+  Future<void> _persistQueue = Future.value();
+  Timer? _smsPollTimer;
   List<SmsBalanceSuggestion> _balanceSuggestions = [];
 
   final List<_MoneySource> _sources = [
@@ -76,6 +80,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _smsPollTimer?.cancel();
     super.dispose();
   }
 
@@ -124,6 +129,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         sources: _sources,
         onAddSource: _showAddSourceSheet,
         onSetBalance: _setSourceBalance,
+        onTransfer: _showTransferDialog,
         onArchiveSource: (source) {
           setState(() {
             source.archived = true;
@@ -138,6 +144,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         activities: _activities,
         onConfirmSuggestion: _confirmSmsSuggestion,
         onUseDetectedBalance: _useDetectedBalance,
+        cloudSyncAvailable: _cloudSyncAvailable,
         onSignOut: () => ref.read(authControllerProvider.notifier).signOut(),
       ),
     ];
@@ -190,62 +197,98 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   Future<void> _loadLedger() async {
-    final key = _ledgerStorageKey;
-
     try {
-      final local = await _storage.read(key: key);
-      if (local != null && local.trim().isNotEmpty) {
-        _applyLedgerJson(jsonDecode(local) as Map<String, dynamic>);
+      final user = ref.read(authControllerProvider).user;
+      if (user == null) return;
+
+      await ref.read(smsSuggestionManagerProvider.notifier).switchUser(user.id);
+      final result = await _ledgerRepository.load(user.id);
+      _cloudSyncAvailable = result.cloudAvailable;
+      if (result.payload != null) {
+        _applyLedgerJson(result.payload!);
       }
 
-      await _pullCloudLedger();
+      if (_sources.any((source) => source.balance != null) &&
+          _smsTransactionCutoffAt == null) {
+        _smsTransactionCutoffAt = DateTime.now();
+        await _persistLedger();
+      }
+      final cutoff = _smsTransactionCutoffAt;
+      if (cutoff != null) {
+        await ref
+            .read(smsSuggestionManagerProvider.notifier)
+            .discardBefore(cutoff);
+      }
     } catch (_) {
       // Keep the default local structure if saved data is not readable.
     } finally {
       if (mounted) {
         setState(() => _isLedgerLoading = false);
-        _autoDetectOpeningBalances();
-        _autoDetectTransactions();
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _initializeSmsAssistant();
+        });
       }
     }
   }
 
-  Future<void> _pullCloudLedger() async {
-    final user = ref.read(authControllerProvider).user;
-    if (user == null || !SupabaseService.isConfigured) return;
+  Future<void> _initializeSmsAssistant() async {
+    if (_hasHandledSmsPermission || !mounted) return;
+    _hasHandledSmsPermission = true;
 
-    try {
-      final response = await SupabaseService.client
-          .from('ledger_snapshots')
-          .select('payload')
-          .eq('user_id', user.id)
-          .maybeSingle();
-      final payload = response?['payload'];
-      if (payload is! Map<String, dynamic>) return;
-
-      _applyLedgerJson(payload);
-      await _storage.write(key: _ledgerStorageKey, value: jsonEncode(payload));
-    } catch (_) {
-      // Cloud sync is best effort; local ledger remains the source on failure.
+    final platform = ref.read(smsPlatformServiceProvider);
+    var permission = await platform.permissionStatus();
+    if (!permission.granted && permission.canAsk && mounted) {
+      final shouldEnable = await showDialog<bool>(
+        context: context,
+        builder: (context) => const _SmsPermissionDialog(),
+      );
+      if (shouldEnable == true) {
+        permission = await platform.requestPermission();
+      }
     }
+
+    if (!permission.granted || !mounted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'SMS detection is disabled. You can continue using LaalKhata manually.',
+            ),
+          ),
+        );
+      }
+      return;
+    }
+
+    await _autoDetectOpeningBalances();
+    await _autoDetectTransactions();
+    _smsPollTimer ??= Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _autoDetectTransactions(),
+    );
+  }
+
+  Future<void> _showCloudSyncWarningIfNeeded() async {
+    if (_cloudSyncAvailable || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Saved on this device. Cloud sync needs the latest database setup.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _saveLedgerSnapshot(Map<String, dynamic> payload) async {
+    final user = ref.read(authControllerProvider).user;
+    if (user == null) return;
+    _cloudSyncAvailable = await _ledgerRepository.save(user.id, payload);
   }
 
   Future<void> _persistLedger() async {
     final payload = _ledgerJson();
-    await _storage.write(key: _ledgerStorageKey, value: jsonEncode(payload));
-
-    final user = ref.read(authControllerProvider).user;
-    if (user == null || !SupabaseService.isConfigured) return;
-
-    try {
-      await SupabaseService.client.from('ledger_snapshots').upsert({
-        'user_id': user.id,
-        'payload': payload,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
-    } catch (_) {
-      // The app stays usable offline or before the ledger table is created.
-    }
+    _persistQueue = _persistQueue.then((_) => _saveLedgerSnapshot(payload));
+    await _persistQueue;
   }
 
   Future<void> _autoDetectOpeningBalances() async {
@@ -257,7 +300,10 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     try {
       final platform = ref.read(smsPlatformServiceProvider);
       final permission = await platform.permissionStatus();
-      if (!permission.granted) return;
+      if (!permission.granted) {
+        _hasAutoScannedBalance = false;
+        return;
+      }
 
       final messages = await platform.readRecentSms(limit: 120);
       final suggestions = await ref
@@ -266,8 +312,10 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
       if (!mounted || suggestions.isEmpty) return;
       final unsetSuggestions = suggestions
-          .where((suggestion) =>
-              _sourceForName(suggestion.sourceName).balance == null)
+          .where(
+            (suggestion) =>
+                _sourceByName(suggestion.sourceName)?.balance == null,
+          )
           .toList();
       if (unsetSuggestions.isEmpty) return;
       setState(() {
@@ -280,7 +328,8 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
   Future<void> _autoDetectTransactions() async {
     if (_isLedgerLoading || _isAutoScanningTransactions || !mounted) return;
-    if (!_sources.any((source) => source.balance != null)) {
+    if (!_sources.any((source) => source.balance != null) ||
+        _smsTransactionCutoffAt == null) {
       await _autoDetectOpeningBalances();
       return;
     }
@@ -307,6 +356,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
                     occurredAt: activity.occurredAt,
                   ),
                 ),
+                notBefore: _smsTransactionCutoffAt!,
               );
 
       if (!mounted || added == 0) return;
@@ -328,20 +378,105 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     }
   }
 
-  Future<void> _saveManualEntry(_ManualEntry entry) async {
+  Future<bool> _saveManualEntry(_ManualEntry entry) async {
     final source = _sourceForName(entry.sourceName);
-    final signedAmount = switch (entry.type) {
-      _EntryType.income => entry.amount,
-      _EntryType.expense => -entry.amount,
-      _EntryType.balanceAdjustment => entry.amount - (source.balance ?? 0),
-      _ => -entry.amount,
-    };
+    if (entry.type == _EntryType.transfer) {
+      final destinationName = entry.destinationSourceName;
+      if (destinationName == null) return false;
+      return _executeTransfer(
+        from: source,
+        to: _sourceForName(destinationName),
+        amount: entry.amount,
+        occurredAt: entry.date,
+        reason: entry.reason,
+      );
+    }
 
-    setState(() {
-      if (entry.type == _EntryType.balanceAdjustment) {
+    if (entry.type == _EntryType.balanceAdjustment) {
+      final previous = source.balance;
+      setState(() {
         source.balance = entry.amount;
+        _activities.insert(
+          0,
+          _ActivityItem(
+            name: entry.reason,
+            source: source.name,
+            amount: entry.amount - (previous ?? 0),
+            time: _friendlyTime(entry.date),
+            icon: Icons.tune_rounded,
+            occurredAt: entry.date,
+            category: entry.category,
+            type: entry.type.name,
+          ),
+        );
+        if (previous == null && _smsTransactionCutoffAt == null) {
+          _smsTransactionCutoffAt = DateTime.now();
+        }
+      });
+      await _persistLedger();
+      return true;
+    }
+
+    final isCredit =
+        entry.type == _EntryType.income || entry.type == _EntryType.borrowed;
+    _ShortfallResolution? shortfall;
+    if (!isCredit) {
+      if (source.balance == null) {
+        _showProfessionalMessage(
+          'Set ${source.name} balance before recording an expense.',
+        );
+        return false;
+      }
+      if (entry.amount > source.balance!) {
+        shortfall = await _resolveShortfall(
+          source: source,
+          requestedAmount: entry.amount,
+        );
+        if (shortfall == null || !mounted) return false;
+      }
+    }
+
+    final signedAmount = isCredit ? entry.amount : -entry.amount;
+    setState(() {
+      if (isCredit) {
+        source.balance = (source.balance ?? 0) + entry.amount;
       } else {
-        source.balance = (source.balance ?? 0) + signedAmount;
+        final current = source.balance ?? 0;
+        source.balance =
+            (current - entry.amount).clamp(0, double.infinity).toDouble();
+        final coverSource = shortfall?.coverSource;
+        if (coverSource != null) {
+          coverSource.balance = (coverSource.balance! - shortfall!.deficit)
+              .clamp(0, double.infinity)
+              .toDouble();
+          _activities.insert(
+            0,
+            _ActivityItem(
+              name: 'Covered ${source.name} shortfall',
+              source: '${coverSource.name} → ${source.name}',
+              amount: 0,
+              time: _friendlyTime(entry.date),
+              icon: Icons.swap_horiz_rounded,
+              occurredAt: entry.date,
+              category: 'Transfer',
+              type: 'coverage',
+            ),
+          );
+        } else if (shortfall != null) {
+          _activities.insert(
+            0,
+            _ActivityItem(
+              name: '${source.name} shortfall set to zero',
+              source: source.name,
+              amount: 0,
+              time: _friendlyTime(entry.date),
+              icon: Icons.info_outline_rounded,
+              occurredAt: entry.date,
+              category: 'Balance',
+              type: 'shortfallIgnored',
+            ),
+          );
+        }
       }
       _activities.insert(
         0,
@@ -358,16 +493,58 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       );
     });
     await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+    return true;
   }
 
-  void _confirmSmsSuggestion(SmsTransactionSuggestion suggestion) {
+  Future<bool> _confirmSmsSuggestion(
+    SmsTransactionSuggestion suggestion,
+  ) async {
     final source = _sourceForName(suggestion.sourceName);
     final signedAmount = suggestion.direction == SmsTransactionDirection.credit
         ? suggestion.amount
         : -suggestion.amount;
+    _ShortfallResolution? shortfall;
+
+    if (signedAmount < 0) {
+      if (source.balance == null) {
+        _showProfessionalMessage(
+          'Set ${source.name} balance before confirming this transaction.',
+        );
+        return false;
+      }
+      if (suggestion.amount > source.balance!) {
+        shortfall = await _resolveShortfall(
+          source: source,
+          requestedAmount: suggestion.amount,
+        );
+        if (shortfall == null || !mounted) return false;
+      }
+    }
 
     setState(() {
-      source.balance = (source.balance ?? 0) + signedAmount;
+      source.balance = ((source.balance ?? 0) + signedAmount)
+          .clamp(0, double.infinity)
+          .toDouble();
+      final coverSource = shortfall?.coverSource;
+      if (coverSource != null) {
+        coverSource.balance = (coverSource.balance! - shortfall!.deficit)
+            .clamp(0, double.infinity)
+            .toDouble();
+        _activities.insert(
+          0,
+          _ActivityItem(
+            name: 'Covered ${source.name} shortfall',
+            source: '${coverSource.name} → ${source.name}',
+            amount: 0,
+            time: _friendlyTime(suggestion.occurredAt),
+            icon: Icons.swap_horiz_rounded,
+            occurredAt: suggestion.occurredAt,
+            category: 'Transfer',
+            type: 'coverage',
+          ),
+        );
+      }
       _activities.insert(
         0,
         _ActivityItem(
@@ -382,7 +559,110 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         ),
       );
     });
-    _persistLedger();
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+    return true;
+  }
+
+  Future<_ShortfallResolution?> _resolveShortfall({
+    required _MoneySource source,
+    required double requestedAmount,
+  }) async {
+    final current = source.balance ?? 0;
+    final deficit = requestedAmount - current;
+    if (deficit <= 0) {
+      return const _ShortfallResolution(deficit: 0);
+    }
+    final eligibleSources = _sources
+        .where(
+          (item) =>
+              !item.archived &&
+              item != source &&
+              item.balance != null &&
+              item.balance! >= deficit,
+        )
+        .toList();
+
+    return showDialog<_ShortfallResolution>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _ShortfallDialog(
+        source: source,
+        deficit: deficit,
+        eligibleSources: eligibleSources,
+      ),
+    );
+  }
+
+  Future<void> _showTransferDialog() async {
+    final active = _sources.where((source) => !source.archived).toList();
+    if (active.length < 2) {
+      _showProfessionalMessage('Add at least two sources to transfer money.');
+      return;
+    }
+    final request = await showDialog<_TransferRequest>(
+      context: context,
+      builder: (context) => _TransferDialog(sources: active),
+    );
+    if (request == null || !mounted) return;
+    final saved = await _executeTransfer(
+      from: request.from,
+      to: request.to,
+      amount: request.amount,
+      occurredAt: DateTime.now(),
+      reason: 'Source transfer',
+    );
+    if (saved) {
+      _showProfessionalMessage('Transfer completed.');
+    }
+  }
+
+  Future<bool> _executeTransfer({
+    required _MoneySource from,
+    required _MoneySource to,
+    required double amount,
+    required DateTime occurredAt,
+    required String reason,
+  }) async {
+    if (from == to || amount <= 0) return false;
+    if (from.balance == null) {
+      _showProfessionalMessage('Set ${from.name} balance before transferring.');
+      return false;
+    }
+    if (from.balance! < amount) {
+      _showProfessionalMessage(
+        '${from.name} does not have enough balance for this transfer.',
+      );
+      return false;
+    }
+
+    setState(() {
+      from.balance = from.balance! - amount;
+      to.balance = (to.balance ?? 0) + amount;
+      _activities.insert(
+        0,
+        _ActivityItem(
+          name: reason,
+          source: '${from.name} → ${to.name}',
+          amount: amount,
+          time: _friendlyTime(occurredAt),
+          icon: Icons.swap_horiz_rounded,
+          occurredAt: occurredAt,
+          category: 'Transfer',
+          type: 'transfer',
+        ),
+      );
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+    return true;
+  }
+
+  void _showProfessionalMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   void _useDetectedBalance({
@@ -392,24 +672,38 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }) {
     final source = _sourceForName(sourceName);
     final previous = source.balance;
+    if (previous != null && (previous - balance).abs() < 0.005) {
+      return;
+    }
+    final isFirstInitializedBalance =
+        _sources.every((item) => item.balance == null);
+    final now = DateTime.now();
 
     setState(() {
       source.balance = balance;
+      if (isFirstInitializedBalance && _smsTransactionCutoffAt == null) {
+        _smsTransactionCutoffAt = now;
+      }
       _activities.insert(
         0,
         _ActivityItem(
           name: wasUnset ? 'Opening balance' : 'Balance adjustment',
           source: source.name,
           amount: previous == null ? balance : balance - previous,
-          time: _friendlyTime(DateTime.now()),
+          time: _friendlyTime(now),
           icon: Icons.tune_rounded,
-          occurredAt: DateTime.now(),
+          occurredAt: now,
           category: 'Balance',
           type: wasUnset ? 'openingBalance' : 'balanceAdjustment',
         ),
       );
     });
     _persistLedger();
+    if (_smsTransactionCutoffAt != null) {
+      ref
+          .read(smsSuggestionManagerProvider.notifier)
+          .discardBefore(_smsTransactionCutoffAt!);
+    }
   }
 
   Future<void> _useBalanceSuggestion(SmsBalanceSuggestion suggestion) async {
@@ -428,38 +722,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
   Future<void> _editBalanceSuggestion(SmsBalanceSuggestion suggestion) async {
     final source = _sourceForName(suggestion.sourceName);
-    final controller = TextEditingController(
-      text: suggestion.balance.toStringAsFixed(0),
-    );
     final edited = await showDialog<double>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Edit ${source.name} Balance'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Balance',
-            prefixText: '৳ ',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(context).pop(
-                double.tryParse(controller.text.trim()),
-              );
-            },
-            child: const Text('Use Balance'),
-          ),
-        ],
+      builder: (context) => _BalanceEditorDialog(
+        title: 'Edit ${source.name} Balance',
+        initialBalance: suggestion.balance,
+        confirmLabel: 'Use Balance',
       ),
     );
-    controller.dispose();
 
     if (edited == null || edited < 0) return;
     _useDetectedBalance(
@@ -536,9 +806,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     );
 
     if (source == null || !mounted) return;
+    final isFirstInitializedBalance = source.balance != null &&
+        _sources.every((item) => item.balance == null);
     setState(() {
       _sources.add(source);
       if (source.balance != null) {
+        if (isFirstInitializedBalance && _smsTransactionCutoffAt == null) {
+          _smsTransactionCutoffAt = DateTime.now();
+        }
         _activities.insert(
           0,
           _ActivityItem(
@@ -562,37 +837,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   Future<void> _setSourceBalance(_MoneySource source) async {
-    final controller = TextEditingController(
-      text: source.balance == null ? '' : source.balance!.toStringAsFixed(0),
-    );
     final balance = await showDialog<double>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text(source.balance == null ? 'Set Balance' : 'Edit Balance'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Balance',
-            prefixText: '৳ ',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = double.tryParse(controller.text.trim());
-              Navigator.of(context).pop(value);
-            },
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (context) => _BalanceEditorDialog(
+        title: source.balance == null ? 'Set Balance' : 'Edit Balance',
+        initialBalance: source.balance,
+        confirmLabel: 'Save',
       ),
     );
-    controller.dispose();
 
     if (balance == null || balance < 0 || !mounted) return;
     _useDetectedBalance(
@@ -603,17 +855,15 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Balance updated.')),
     );
-  }
-
-  String get _ledgerStorageKey {
-    final userId = ref.read(authControllerProvider).user?.id ?? 'anonymous';
-    return 'ledger_snapshot_v2_$userId';
+    await _showCloudSyncWarningIfNeeded();
   }
 
   Map<String, dynamic> _ledgerJson() {
     return {
       'sources': _sources.map((source) => source.toJson()).toList(),
       'activities': _activities.map((activity) => activity.toJson()).toList(),
+      'smsTransactionCutoffAt': _smsTransactionCutoffAt?.toIso8601String(),
+      'updatedAt': DateTime.now().toUtc().toIso8601String(),
     };
   }
 
@@ -628,6 +878,8 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         .map(_ActivityItem.fromJson)
         .whereType<_ActivityItem>()
         .toList();
+    _smsTransactionCutoffAt =
+        DateTime.tryParse('${json['smsTransactionCutoffAt']}');
 
     if (sources != null && sources.isNotEmpty) {
       _sources
@@ -1018,6 +1270,12 @@ class _OpeningBalanceSuggestionsCard extends StatelessWidget {
                 ),
                 child: Row(
                   children: [
+                    _ProviderLogo(
+                      sourceName: suggestion.sourceName,
+                      fallbackIcon: Icons.account_balance_wallet_outlined,
+                      fallbackColor: AppColors.primary,
+                    ),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1148,11 +1406,18 @@ class _RecentActivityCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${activity.amount >= 0 ? '+' : '-'}${_money(activity.amount.abs())}',
+                    activity.type == 'transfer'
+                        ? _money(activity.amount)
+                        : activity.amount == 0
+                            ? 'Recorded'
+                            : '${activity.amount >= 0 ? '+' : '-'}${_money(activity.amount.abs())}',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          color: activity.amount >= 0
-                              ? AppColors.positive
-                              : AppColors.danger,
+                          color: activity.type == 'transfer' ||
+                                  activity.amount == 0
+                              ? AppColors.mutedInk
+                              : activity.amount >= 0
+                                  ? AppColors.positive
+                                  : AppColors.danger,
                           fontWeight: FontWeight.w900,
                         ),
                   ),
@@ -1225,7 +1490,7 @@ class _SummaryTab extends StatelessWidget {
       const Color(0xFF2563EB),
     ];
     final totals = <String, double>{};
-    for (final activity in activities.where((item) => item.amount < 0)) {
+    for (final activity in activities.where(_isExpenseActivity)) {
       totals.update(
         activity.category,
         (value) => value + activity.amount.abs(),
@@ -1252,7 +1517,7 @@ class _AddTab extends StatefulWidget {
   });
 
   final List<_MoneySource> sources;
-  final ValueChanged<_ManualEntry> onSave;
+  final Future<bool> Function(_ManualEntry entry) onSave;
 
   @override
   State<_AddTab> createState() => _AddTabState();
@@ -1265,6 +1530,7 @@ class _AddTabState extends State<_AddTab> {
   final _noteController = TextEditingController();
   _EntryType _type = _EntryType.expense;
   String _sourceName = 'Cash';
+  String? _destinationSourceName;
   String _category = 'Others';
   DateTime _date = DateTime.now();
 
@@ -1281,6 +1547,12 @@ class _AddTabState extends State<_AddTab> {
     final sourceNames = widget.sources.map((source) => source.name).toList();
     if (!sourceNames.contains(_sourceName) && sourceNames.isNotEmpty) {
       _sourceName = sourceNames.first;
+    }
+    final destinationOptions =
+        sourceNames.where((name) => name != _sourceName).toList();
+    if (!destinationOptions.contains(_destinationSourceName)) {
+      _destinationSourceName =
+          destinationOptions.isEmpty ? null : destinationOptions.first;
     }
 
     return ListView(
@@ -1336,9 +1608,47 @@ class _AddTabState extends State<_AddTab> {
                         .toList(),
                     onChanged: (value) {
                       if (value == null) return;
-                      setState(() => _sourceName = value);
+                      setState(() {
+                        _sourceName = value;
+                        if (_destinationSourceName == value) {
+                          _destinationSourceName = sourceNames.firstWhere(
+                            (name) => name != value,
+                            orElse: () => value,
+                          );
+                        }
+                      });
                     },
                   ),
+                  if (_type == _EntryType.transfer) ...[
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      initialValue:
+                          destinationOptions.contains(_destinationSourceName)
+                              ? _destinationSourceName
+                              : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Transfer to',
+                        prefixIcon: Icon(Icons.call_received_rounded),
+                      ),
+                      items: destinationOptions
+                          .map(
+                            (source) => DropdownMenuItem(
+                              value: source,
+                              child: Text(source),
+                            ),
+                          )
+                          .toList(),
+                      validator: (value) {
+                        if (_type == _EntryType.transfer && value == null) {
+                          return 'Select a destination source.';
+                        }
+                        return null;
+                      },
+                      onChanged: (value) {
+                        setState(() => _destinationSourceName = value);
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   TextFormField(
                     controller: _amountController,
@@ -1359,42 +1669,38 @@ class _AddTabState extends State<_AddTab> {
                     },
                   ),
                   const SizedBox(height: 14),
-                  Row(
+                  Column(
                     children: [
-                      Expanded(
-                        child: DropdownButtonFormField<String>(
-                          initialValue: _category,
-                          decoration: const InputDecoration(
-                            labelText: 'Category',
-                            prefixIcon: Icon(Icons.category_outlined),
-                          ),
-                          items: const [
-                            'Others',
-                            'Food',
-                            'Transport',
-                            'Study',
-                            'Hall',
-                            'Treat/Party',
-                          ]
-                              .map(
-                                (category) => DropdownMenuItem(
-                                  value: category,
-                                  child: Text(category),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (value) {
-                            if (value == null) return;
-                            setState(() => _category = value);
-                          },
+                      DropdownButtonFormField<String>(
+                        initialValue: _category,
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                          prefixIcon: Icon(Icons.category_outlined),
                         ),
+                        items: const [
+                          'Others',
+                          'Food',
+                          'Transport',
+                          'Study',
+                          'Hall',
+                          'Treat/Party',
+                        ]
+                            .map(
+                              (category) => DropdownMenuItem(
+                                value: category,
+                                child: Text(category),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value == null) return;
+                          setState(() => _category = value);
+                        },
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _DateField(
-                          date: _date,
-                          onTap: _pickDate,
-                        ),
+                      const SizedBox(height: 14),
+                      _DateField(
+                        date: _date,
+                        onTap: _pickDate,
                       ),
                     ],
                   ),
@@ -1434,11 +1740,11 @@ class _AddTabState extends State<_AddTab> {
     setState(() => _date = picked);
   }
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final amount = double.parse(_amountController.text.trim());
 
-    widget.onSave(
+    final saved = await widget.onSave(
       _ManualEntry(
         type: _type,
         reason: _nameController.text.trim(),
@@ -1447,8 +1753,11 @@ class _AddTabState extends State<_AddTab> {
         category: _category,
         note: _noteController.text.trim(),
         date: _date,
+        destinationSourceName:
+            _type == _EntryType.transfer ? _destinationSourceName : null,
       ),
     );
+    if (!mounted || !saved) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Transaction saved.')),
@@ -1465,12 +1774,14 @@ class _SourcesTab extends StatelessWidget {
     required this.sources,
     required this.onAddSource,
     required this.onSetBalance,
+    required this.onTransfer,
     required this.onArchiveSource,
   });
 
   final List<_MoneySource> sources;
   final VoidCallback onAddSource;
   final ValueChanged<_MoneySource> onSetBalance;
+  final VoidCallback onTransfer;
   final ValueChanged<_MoneySource> onArchiveSource;
 
   @override
@@ -1483,9 +1794,21 @@ class _SourcesTab extends StatelessWidget {
         _PageTitle(
           title: 'Sources',
           subtitle: 'Manage wallets, banks, cards, savings, and custom sources',
-          trailing: IconButton.filled(
-            onPressed: onAddSource,
-            icon: const Icon(Icons.add),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton.outlined(
+                tooltip: 'Transfer between sources',
+                onPressed: onTransfer,
+                icon: const Icon(Icons.swap_horiz_rounded),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                tooltip: 'Add source',
+                onPressed: onAddSource,
+                icon: const Icon(Icons.add),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 16),
@@ -1535,17 +1858,20 @@ class _MoreTab extends ConsumerWidget {
     required this.activities,
     required this.onConfirmSuggestion,
     required this.onUseDetectedBalance,
+    required this.cloudSyncAvailable,
     required this.onSignOut,
   });
 
   final List<_MoneySource> sources;
   final List<_ActivityItem> activities;
-  final ValueChanged<SmsTransactionSuggestion> onConfirmSuggestion;
+  final Future<bool> Function(SmsTransactionSuggestion suggestion)
+      onConfirmSuggestion;
   final void Function({
     required String sourceName,
     required double balance,
     required bool wasUnset,
   }) onUseDetectedBalance;
+  final bool cloudSyncAvailable;
   final VoidCallback onSignOut;
 
   @override
@@ -1586,10 +1912,26 @@ class _MoreTab extends ConsumerWidget {
                 onTap: () => _showComingSoon(context, 'Projects & Lists'),
               ),
               _MoreTile(
+                icon: Icons.receipt_long_outlined,
+                title: 'Transaction History',
+                subtitle: 'All expenses, income, transfers, and adjustments',
+                onTap: () => _showTransactionHistory(context),
+              ),
+              _MoreTile(
                 icon: Icons.sms_outlined,
                 title: 'Detected Messages',
                 subtitle: 'Pending SMS suggestions will appear here',
                 onTap: () => _showDetectedMessages(context),
+              ),
+              _MoreTile(
+                icon: cloudSyncAvailable
+                    ? Icons.cloud_done_outlined
+                    : Icons.cloud_off_outlined,
+                title: 'Cloud Sync',
+                subtitle: cloudSyncAvailable
+                    ? 'Your ledger is synced across devices'
+                    : 'Database setup required for cross-device restore',
+                onTap: () => _showCloudStatus(context),
               ),
               _MoreTile(
                 icon: Icons.file_download_outlined,
@@ -1659,6 +2001,30 @@ class _MoreTab extends ConsumerWidget {
     );
   }
 
+  void _showTransactionHistory(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => _TransactionHistorySheet(
+        activities: activities,
+      ),
+    );
+  }
+
+  void _showCloudStatus(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          cloudSyncAvailable
+              ? 'Your latest ledger is available for cross-device restore.'
+              : 'Run the latest Supabase schema to enable cloud restore.',
+        ),
+      ),
+    );
+  }
+
   void _showSecuritySheet(BuildContext context) {
     showModalBottomSheet<void>(
       context: context,
@@ -1666,6 +2032,50 @@ class _MoreTab extends ConsumerWidget {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => const _SecuritySheet(),
+    );
+  }
+}
+
+class _TransactionHistorySheet extends StatelessWidget {
+  const _TransactionHistorySheet({required this.activities});
+
+  final List<_ActivityItem> activities;
+
+  @override
+  Widget build(BuildContext context) {
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.9,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) {
+        return ListView(
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+          children: [
+            Row(
+              children: [
+                const _IconBubble(
+                  icon: Icons.receipt_long_outlined,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Transaction History',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (activities.isEmpty)
+              const _DetectedMessagesEmptyState()
+            else
+              _RecentActivityCard(activities: activities),
+          ],
+        );
+      },
     );
   }
 }
@@ -1874,7 +2284,8 @@ class _DetectedMessagesSheet extends ConsumerStatefulWidget {
 
   final List<_MoneySource> sources;
   final List<_ActivityItem> activities;
-  final ValueChanged<SmsTransactionSuggestion> onConfirmSuggestion;
+  final Future<bool> Function(SmsTransactionSuggestion suggestion)
+      onConfirmSuggestion;
   final void Function({
     required String sourceName,
     required double balance,
@@ -1889,7 +2300,6 @@ class _DetectedMessagesSheet extends ConsumerStatefulWidget {
 class _DetectedMessagesSheetState
     extends ConsumerState<_DetectedMessagesSheet> {
   var _showIgnored = false;
-  var _isScanning = false;
   String? _message;
   bool _messageIsDanger = false;
 
@@ -1931,17 +2341,6 @@ class _DetectedMessagesSheetState
                           fontWeight: FontWeight.w900,
                         ),
                   ),
-                ),
-                FilledButton.icon(
-                  onPressed: _isScanning ? null : _scanSms,
-                  icon: _isScanning
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.search_rounded),
-                  label: Text(_isScanning ? 'Scanning' : 'Scan SMS'),
                 ),
               ],
             ),
@@ -1998,86 +2397,6 @@ class _DetectedMessagesSheetState
     );
   }
 
-  Future<void> _scanSms() async {
-    setState(() {
-      _isScanning = true;
-      _message = null;
-      _messageIsDanger = false;
-    });
-
-    try {
-      final platform = ref.read(smsPlatformServiceProvider);
-      var permission = await platform.permissionStatus();
-      if (!permission.granted) {
-        final shouldAsk = await _showPermissionDialog();
-        if (!shouldAsk) {
-          _showMessage(
-            'SMS detection is disabled. You can continue using LaalKhata manually.',
-          );
-          return;
-        }
-        permission = await platform.requestPermission();
-      }
-
-      if (!permission.granted) {
-        _showMessage(
-          'SMS detection is disabled. You can continue using LaalKhata manually.',
-        );
-        return;
-      }
-
-      final messages = await platform.readRecentSms();
-      final added =
-          await ref.read(smsSuggestionManagerProvider.notifier).scanMessages(
-                messages: messages,
-                currentBalanceForSource: _balanceForSource,
-                existingTransactions: widget.activities.map(
-                  (activity) => ExistingTransactionSnapshot(
-                    sourceName: activity.source,
-                    amount: activity.amount.abs(),
-                    direction: activity.amount >= 0
-                        ? SmsTransactionDirection.credit
-                        : SmsTransactionDirection.debit,
-                    occurredAt: activity.occurredAt,
-                  ),
-                ),
-              );
-
-      _showMessage(
-        added == 0
-            ? 'No financial SMS detected.'
-            : '$added transaction suggestion${added == 1 ? '' : 's'} detected.',
-      );
-    } catch (_) {
-      _showMessage('Something went wrong. Please try again.', isDanger: true);
-    } finally {
-      if (mounted) setState(() => _isScanning = false);
-    }
-  }
-
-  Future<bool> _showPermissionDialog() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Enable SMS Detection?'),
-        content: const Text(
-          'LaalKhata can read financial SMS locally to suggest transactions.\n\nRaw SMS messages are never uploaded.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Not Now'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Allow'),
-          ),
-        ],
-      ),
-    );
-    return result == true;
-  }
-
   double? _balanceForSource(String sourceName) {
     final source = widget.sources.where(
       (item) => item.name.toLowerCase() == sourceName.toLowerCase(),
@@ -2090,7 +2409,14 @@ class _DetectedMessagesSheetState
     SmsSuggestionManager manager,
     SmsTransactionSuggestion suggestion,
   ) async {
-    widget.onConfirmSuggestion(suggestion);
+    final confirmed = await widget.onConfirmSuggestion(suggestion);
+    if (!confirmed) {
+      _showMessage(
+        'Transaction was not confirmed. Review the selected source balance.',
+        isDanger: true,
+      );
+      return;
+    }
     await manager.removeSuggestion(suggestion.id);
     _showMessage('Transaction confirmed.');
   }
@@ -2186,7 +2512,7 @@ class _SmsSuggestionCard extends StatefulWidget {
   final SmsTransactionSuggestion suggestion;
   final List<_MoneySource> sources;
   final double? currentBalance;
-  final ValueChanged<SmsTransactionSuggestion> onConfirm;
+  final Future<void> Function(SmsTransactionSuggestion suggestion) onConfirm;
   final VoidCallback onIgnore;
   final void Function({
     required String sourceName,
@@ -2249,9 +2575,10 @@ class _SmsSuggestionCardState extends State<_SmsSuggestionCard> {
           children: [
             Row(
               children: [
-                _IconBubble(
-                  icon: Icons.receipt_long_outlined,
-                  color: _direction == SmsTransactionDirection.credit
+                _ProviderLogo(
+                  sourceName: widget.suggestion.sourceName,
+                  fallbackIcon: Icons.receipt_long_outlined,
+                  fallbackColor: _direction == SmsTransactionDirection.credit
                       ? AppColors.positive
                       : AppColors.primary,
                 ),
@@ -2446,41 +2773,18 @@ class _SmsSuggestionCardState extends State<_SmsSuggestionCard> {
       if (shouldContinue != true) return;
     }
 
-    widget.onConfirm(updated);
+    await widget.onConfirm(updated);
   }
 
   Future<void> _editDetectedBalance(double detectedBalance) async {
-    final controller = TextEditingController(
-      text: detectedBalance.toStringAsFixed(0),
-    );
     final edited = await showDialog<double>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Detected Balance'),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: 'Balance',
-            prefixText: '৳ ',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = double.tryParse(controller.text.trim());
-              Navigator.of(context).pop(value);
-            },
-            child: const Text('Use Balance'),
-          ),
-        ],
+      builder: (context) => _BalanceEditorDialog(
+        title: 'Edit Detected Balance',
+        initialBalance: detectedBalance,
+        confirmLabel: 'Use Balance',
       ),
     );
-    controller.dispose();
 
     if (edited == null || edited < 0) return;
     widget.onUseDetectedBalance(
@@ -3359,7 +3663,11 @@ class _SourceListTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _IconBubble(icon: source.icon, color: source.color),
+        _ProviderLogo(
+          sourceName: source.name,
+          fallbackIcon: source.icon,
+          fallbackColor: source.color,
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
@@ -3491,6 +3799,360 @@ class _SectionHeader extends StatelessWidget {
   }
 }
 
+class _BalanceEditorDialog extends StatefulWidget {
+  const _BalanceEditorDialog({
+    required this.title,
+    required this.confirmLabel,
+    this.initialBalance,
+  });
+
+  final String title;
+  final String confirmLabel;
+  final double? initialBalance;
+
+  @override
+  State<_BalanceEditorDialog> createState() => _BalanceEditorDialogState();
+}
+
+class _BalanceEditorDialogState extends State<_BalanceEditorDialog> {
+  late final TextEditingController _controller;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.initialBalance?.toStringAsFixed(0) ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: InputDecoration(
+          labelText: 'Balance',
+          prefixText: '৳ ',
+          errorText: _error,
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.confirmLabel),
+        ),
+      ],
+    );
+  }
+
+  void _submit() {
+    final value = double.tryParse(_controller.text.trim());
+    if (value == null || value < 0) {
+      setState(() => _error = 'Enter a valid balance.');
+      return;
+    }
+    Navigator.of(context).pop(value);
+  }
+}
+
+class _SmsPermissionDialog extends StatelessWidget {
+  const _SmsPermissionDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(
+        Icons.mark_chat_unread_outlined,
+        color: AppColors.primary,
+      ),
+      title: const Text('Enable smart SMS detection?'),
+      content: const Text(
+        'LaalKhata reads financial SMS locally to find opening balances and suggest new transactions.\n\nRaw messages are never uploaded.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('Not Now'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('Continue'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ShortfallDialog extends StatefulWidget {
+  const _ShortfallDialog({
+    required this.source,
+    required this.deficit,
+    required this.eligibleSources,
+  });
+
+  final _MoneySource source;
+  final double deficit;
+  final List<_MoneySource> eligibleSources;
+
+  @override
+  State<_ShortfallDialog> createState() => _ShortfallDialogState();
+}
+
+class _ShortfallDialogState extends State<_ShortfallDialog> {
+  _MoneySource? _coverSource;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.eligibleSources.isNotEmpty) {
+      _coverSource = widget.eligibleSources.first;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(Icons.account_balance_wallet_outlined),
+      title: const Text('Balance would fall below zero'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '${widget.source.name} would be -${_money(widget.deficit)}. Was this amount covered from another source?',
+          ),
+          if (widget.eligibleSources.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            DropdownButtonFormField<_MoneySource>(
+              initialValue: _coverSource,
+              decoration: const InputDecoration(
+                labelText: 'Cover from',
+                prefixIcon: Icon(Icons.swap_horiz_rounded),
+              ),
+              items: widget.eligibleSources
+                  .map(
+                    (source) => DropdownMenuItem(
+                      value: source,
+                      child: Text(
+                        '${source.name} (${_money(source.balance ?? 0)})',
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() => _coverSource = value),
+            ),
+          ] else ...[
+            const SizedBox(height: 12),
+            Text(
+              'No other source has enough balance. You can set this source to zero and keep the expense in history.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.mutedInk,
+                  ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(
+            _ShortfallResolution(deficit: widget.deficit),
+          ),
+          child: const Text('Set to Zero'),
+        ),
+        if (_coverSource != null)
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(
+              _ShortfallResolution(
+                deficit: widget.deficit,
+                coverSource: _coverSource,
+              ),
+            ),
+            child: const Text('Cover Amount'),
+          ),
+      ],
+    );
+  }
+}
+
+class _TransferDialog extends StatefulWidget {
+  const _TransferDialog({required this.sources});
+
+  final List<_MoneySource> sources;
+
+  @override
+  State<_TransferDialog> createState() => _TransferDialogState();
+}
+
+class _TransferDialogState extends State<_TransferDialog> {
+  late _MoneySource _from;
+  late _MoneySource _to;
+  final _amountController = TextEditingController();
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _from = widget.sources.first;
+    _to = widget.sources[1];
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Transfer Between Sources'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButtonFormField<_MoneySource>(
+            initialValue: _from,
+            decoration: const InputDecoration(
+              labelText: 'From',
+              prefixIcon: Icon(Icons.call_made_rounded),
+            ),
+            items: widget.sources
+                .where((source) => source != _to)
+                .map(
+                  (source) => DropdownMenuItem(
+                    value: source,
+                    child: Text(source.name),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value != null) setState(() => _from = value);
+            },
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<_MoneySource>(
+            initialValue: _to,
+            decoration: const InputDecoration(
+              labelText: 'To',
+              prefixIcon: Icon(Icons.call_received_rounded),
+            ),
+            items: widget.sources
+                .where((source) => source != _from)
+                .map(
+                  (source) => DropdownMenuItem(
+                    value: source,
+                    child: Text(source.name),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value != null) setState(() => _to = value);
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _amountController,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Amount',
+              prefixText: '৳ ',
+              errorText: _error,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Transfer'),
+        ),
+      ],
+    );
+  }
+
+  void _submit() {
+    final amount = double.tryParse(_amountController.text.trim());
+    if (amount == null || amount <= 0) {
+      setState(() => _error = 'Enter a valid amount.');
+      return;
+    }
+    Navigator.of(context).pop(
+      _TransferRequest(from: _from, to: _to, amount: amount),
+    );
+  }
+}
+
+class _ProviderLogo extends StatelessWidget {
+  const _ProviderLogo({
+    required this.sourceName,
+    required this.fallbackIcon,
+    required this.fallbackColor,
+  });
+
+  final String sourceName;
+  final IconData fallbackIcon;
+  final Color fallbackColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final asset = _providerAsset(sourceName);
+    if (asset == null) {
+      return _IconBubble(icon: fallbackIcon, color: fallbackColor);
+    }
+
+    return Container(
+      width: 42,
+      height: 42,
+      padding: const EdgeInsets.all(7),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Image.asset(
+        asset,
+        fit: BoxFit.contain,
+        errorBuilder: (context, error, stackTrace) {
+          return Icon(fallbackIcon, color: fallbackColor, size: 22);
+        },
+      ),
+    );
+  }
+
+  String? _providerAsset(String name) {
+    final normalized = name.toLowerCase().replaceAll(' ', '');
+    if (normalized.contains('bkash')) return 'assets/providers/bkash.png';
+    if (normalized.contains('nagad')) return 'assets/providers/nagad.png';
+    if (normalized.contains('rocket')) return 'assets/providers/rocket.webp';
+    if (normalized.contains('abbank') || normalized == 'ab') {
+      return 'assets/providers/ab_bank.png';
+    }
+    return null;
+  }
+}
+
 class _IconBubble extends StatelessWidget {
   const _IconBubble({
     required this.icon,
@@ -3555,10 +4217,10 @@ class _SummaryHeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final expense = activities
-        .where((activity) => activity.amount < 0)
+        .where(_isExpenseActivity)
         .fold(0.0, (sum, activity) => sum + activity.amount.abs());
     final income = activities
-        .where((activity) => activity.amount > 0)
+        .where(_isIncomeActivity)
         .fold(0.0, (sum, activity) => sum + activity.amount);
 
     return Card(
@@ -3874,6 +4536,7 @@ class _ManualEntry {
     required this.category,
     required this.note,
     required this.date,
+    this.destinationSourceName,
   });
 
   final _EntryType type;
@@ -3883,6 +4546,29 @@ class _ManualEntry {
   final String category;
   final String note;
   final DateTime date;
+  final String? destinationSourceName;
+}
+
+class _ShortfallResolution {
+  const _ShortfallResolution({
+    required this.deficit,
+    this.coverSource,
+  });
+
+  final double deficit;
+  final _MoneySource? coverSource;
+}
+
+class _TransferRequest {
+  const _TransferRequest({
+    required this.from,
+    required this.to,
+    required this.amount,
+  });
+
+  final _MoneySource from;
+  final _MoneySource to;
+  final double amount;
 }
 
 class _MoneySource {
@@ -4002,6 +4688,23 @@ class _BreakdownItem {
   final String label;
   final double value;
   final Color color;
+}
+
+bool _isExpenseActivity(_ActivityItem activity) {
+  return const {
+    'expense',
+    'lent',
+    'project',
+    'debit',
+  }.contains(activity.type);
+}
+
+bool _isIncomeActivity(_ActivityItem activity) {
+  return const {
+    'income',
+    'borrowed',
+    'credit',
+  }.contains(activity.type);
 }
 
 String _money(double value) {

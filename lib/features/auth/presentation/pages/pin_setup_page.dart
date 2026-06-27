@@ -123,23 +123,27 @@ class _PinSetupPageState extends ConsumerState<PinSetupPage> {
                             builder: (context, snapshot) {
                               final available =
                                   snapshot.data?.isAvailable ?? false;
-                              return SwitchListTile(
-                                value: available && _enableFingerprint,
-                                onChanged: available
-                                    ? (value) {
-                                        setState(() {
-                                          _enableFingerprint = value;
-                                        });
-                                      }
-                                    : null,
-                                title: const Text('Enable fingerprint unlock'),
-                                subtitle: Text(
-                                  available
-                                      ? 'Optional. PIN will still work.'
-                                      : snapshot.data?.message ??
-                                          'Checking fingerprint availability...',
+                              return Material(
+                                color: Colors.transparent,
+                                child: SwitchListTile(
+                                  value: available && _enableFingerprint,
+                                  onChanged: available
+                                      ? (value) {
+                                          setState(() {
+                                            _enableFingerprint = value;
+                                          });
+                                        }
+                                      : null,
+                                  title:
+                                      const Text('Enable fingerprint unlock'),
+                                  subtitle: Text(
+                                    available
+                                        ? 'Optional. PIN will still work.'
+                                        : snapshot.data?.message ??
+                                            'Checking fingerprint availability...',
+                                  ),
+                                  contentPadding: EdgeInsets.zero,
                                 ),
-                                contentPadding: EdgeInsets.zero,
                               );
                             },
                           ),

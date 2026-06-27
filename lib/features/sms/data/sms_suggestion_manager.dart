@@ -11,7 +11,7 @@ import 'sms_platform_service.dart';
 
 final smsSuggestionManagerProvider =
     StateNotifierProvider<SmsSuggestionManager, List<SmsTransactionSuggestion>>(
-  (ref) => SmsSuggestionManager()..load(),
+  (ref) => SmsSuggestionManager(),
 );
 
 final smsPlatformServiceProvider = Provider<SmsPlatformService>((ref) {
@@ -36,7 +36,7 @@ class SmsSuggestionManager
   final SmsTransactionValidator _validator;
   final SmsDuplicateDetector _duplicateDetector;
 
-  static const _storageKey = 'local_sms_suggestions_v1';
+  String? _ownerId;
 
   List<SmsTransactionSuggestion> get pending {
     return state
@@ -50,7 +50,11 @@ class SmsSuggestionManager
         .toList();
   }
 
-  Future<void> load() async {
+  Future<void> switchUser(String userId) async {
+    if (_ownerId == userId) return;
+    _ownerId = userId;
+    state = const [];
+
     final raw = await _secureStorage.read(key: _storageKey);
     if (raw == null || raw.trim().isEmpty) return;
 
@@ -70,6 +74,7 @@ class SmsSuggestionManager
     required Iterable<RawSmsMessage> messages,
     required double? Function(String sourceName) currentBalanceForSource,
     required Iterable<ExistingTransactionSnapshot> existingTransactions,
+    required DateTime notBefore,
   }) async {
     var added = 0;
     final next = [...state];
@@ -77,6 +82,7 @@ class SmsSuggestionManager
     for (final message in messages) {
       final parsed = _parser.parse(message);
       if (parsed == null) continue;
+      if (!parsed.occurredAt.isAfter(notBefore)) continue;
 
       final currentBalance =
           currentBalanceForSource(parsed.provider.defaultSourceName);
@@ -173,10 +179,23 @@ class SmsSuggestionManager
     await _save();
   }
 
+  Future<void> discardBefore(DateTime cutoff) async {
+    final next = state
+        .where((suggestion) => suggestion.occurredAt.isAfter(cutoff))
+        .toList();
+    if (next.length == state.length) return;
+    state = next;
+    await _save();
+  }
+
   Future<void> _save() async {
+    if (_ownerId == null) return;
     final serialized = jsonEncode(state.map((item) => item.toJson()).toList());
     await _secureStorage.write(key: _storageKey, value: serialized);
   }
+
+  String get _storageKey =>
+      'local_sms_suggestions_v2_${_ownerId ?? 'anonymous'}';
 
   String _stableId(ParsedSmsTransaction parsed) {
     final trx = parsed.transactionId;
