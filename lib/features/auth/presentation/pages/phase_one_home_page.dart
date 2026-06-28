@@ -9,6 +9,8 @@ import '../../../../core/services/biometric_auth_service.dart';
 import '../../../../core/services/ledger_snapshot_repository.dart';
 import '../../../../core/services/local_pin_service.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../ledger/domain/ledger_document.dart';
+import '../../../ledger/domain/source_identity.dart';
 import '../../../sms/data/sms_suggestion_manager.dart';
 import '../../../sms/domain/balance_initializer.dart';
 import '../../../sms/domain/sms_duplicate_detector.dart';
@@ -204,13 +206,17 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       await ref.read(smsSuggestionManagerProvider.notifier).switchUser(user.id);
       final result = await _ledgerRepository.load(user.id);
       _cloudSyncAvailable = result.cloudAvailable;
-      if (result.payload != null) {
-        _applyLedgerJson(result.payload!);
+      var shouldPersistCleanup = false;
+      if (result.document != null) {
+        shouldPersistCleanup = _applyLedgerJson(result.document!.toJson());
       }
 
       if (_sources.any((source) => source.balance != null) &&
           _smsTransactionCutoffAt == null) {
         _smsTransactionCutoffAt = DateTime.now();
+        shouldPersistCleanup = true;
+      }
+      if (shouldPersistCleanup) {
         await _persistLedger();
       }
       final cutoff = _smsTransactionCutoffAt;
@@ -282,7 +288,10 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   Future<void> _saveLedgerSnapshot(Map<String, dynamic> payload) async {
     final user = ref.read(authControllerProvider).user;
     if (user == null) return;
-    _cloudSyncAvailable = await _ledgerRepository.save(user.id, payload);
+    _cloudSyncAvailable = await _ledgerRepository.save(
+      user.id,
+      LedgerDocument.fromJson(payload),
+    );
   }
 
   Future<void> _persistLedger() async {
@@ -769,8 +778,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   _MoneySource? _sourceByName(String sourceName) {
+    final identity = sourceIdentityKey(sourceName);
     final existing = _sources.where(
-      (source) => source.name.toLowerCase() == sourceName.toLowerCase(),
+      (source) => sourceIdentityKey(source.name) == identity,
     );
     if (existing.isEmpty) return null;
     return existing.first;
@@ -802,10 +812,19 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => const _AddSourceSheet(),
+      builder: (context) => _AddSourceSheet(
+        existingSourceKeys:
+            _sources.map((source) => sourceIdentityKey(source.name)).toSet(),
+      ),
     );
 
     if (source == null || !mounted) return;
+    if (_sourceByName(source.name) != null) {
+      _showProfessionalMessage(
+        '${source.name} already exists in your Sources.',
+      );
+      return;
+    }
     final isFirstInitializedBalance = source.balance != null &&
         _sources.every((item) => item.balance == null);
     setState(() {
@@ -867,7 +886,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     };
   }
 
-  void _applyLedgerJson(Map<String, dynamic> json) {
+  bool _applyLedgerJson(Map<String, dynamic> json) {
     final sources = (json['sources'] as List<dynamic>?)
         ?.whereType<Map<String, dynamic>>()
         .map(_MoneySource.fromJson)
@@ -881,16 +900,37 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     _smsTransactionCutoffAt =
         DateTime.tryParse('${json['smsTransactionCutoffAt']}');
 
+    var removedDuplicates = false;
     if (sources != null && sources.isNotEmpty) {
+      final uniqueSources = <_MoneySource>[];
+      final byIdentity = <String, _MoneySource>{};
+      for (final source in sources) {
+        final identity = sourceIdentityKey(source.name);
+        final existing = byIdentity[identity];
+        if (existing == null) {
+          byIdentity[identity] = source;
+          uniqueSources.add(source);
+          continue;
+        }
+
+        removedDuplicates = true;
+        if (existing.balance == null && source.balance != null) {
+          existing.balance = source.balance;
+        }
+        if (existing.archived && !source.archived) {
+          existing.archived = false;
+        }
+      }
       _sources
         ..clear()
-        ..addAll(sources);
+        ..addAll(uniqueSources);
     }
     if (activities != null) {
       _activities
         ..clear()
         ..addAll(activities);
     }
+    return removedDuplicates;
   }
 }
 
@@ -3477,7 +3517,11 @@ class _SecurityMessage extends StatelessWidget {
 }
 
 class _AddSourceSheet extends StatefulWidget {
-  const _AddSourceSheet();
+  const _AddSourceSheet({
+    required this.existingSourceKeys,
+  });
+
+  final Set<String> existingSourceKeys;
 
   @override
   State<_AddSourceSheet> createState() => _AddSourceSheetState();
@@ -3541,8 +3585,16 @@ class _AddSourceSheetState extends State<_AddSourceSheet> {
                   prefixIcon: Icon(Icons.wallet_outlined),
                 ),
                 validator: (value) {
-                  if ((value ?? '').trim().isEmpty) {
+                  final name = (value ?? '').trim();
+                  if (name.isEmpty) {
                     return 'Source name is required.';
+                  }
+                  final identity = sourceIdentityKey(name);
+                  if (identity.isEmpty) {
+                    return 'Enter a valid source name.';
+                  }
+                  if (widget.existingSourceKeys.contains(identity)) {
+                    return 'This source already exists.';
                   }
                   return null;
                 },
