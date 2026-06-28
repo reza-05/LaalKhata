@@ -32,3 +32,4 @@ flutter:
   assets:
     - assets/brand/
     - assets/providers/
+    - assets/source_types/

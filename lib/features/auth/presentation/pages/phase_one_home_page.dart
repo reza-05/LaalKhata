@@ -3717,6 +3717,7 @@ class _SourceListTile extends StatelessWidget {
       children: [
         _ProviderLogo(
           sourceName: source.name,
+          sourceType: source.type,
           fallbackIcon: source.icon,
           fallbackColor: source.color,
         ),
@@ -4161,15 +4162,17 @@ class _ProviderLogo extends StatelessWidget {
     required this.sourceName,
     required this.fallbackIcon,
     required this.fallbackColor,
+    this.sourceType,
   });
 
   final String sourceName;
   final IconData fallbackIcon;
   final Color fallbackColor;
+  final _SourceType? sourceType;
 
   @override
   Widget build(BuildContext context) {
-    final asset = _providerAsset(sourceName);
+    final asset = _assetForSource(sourceName, sourceType);
     if (asset == null) {
       return _IconBubble(icon: fallbackIcon, color: fallbackColor);
     }
@@ -4193,11 +4196,40 @@ class _ProviderLogo extends StatelessWidget {
     );
   }
 
+  String? _assetForSource(String name, _SourceType? type) {
+    if (type == null) return _providerAsset(name);
+
+    if (type == _SourceType.mobileBanking) {
+      return _mobileBankingAsset(name) ??
+          'assets/source_types/mobile_banking.png';
+    }
+
+    return switch (type) {
+      _SourceType.cash => 'assets/source_types/cash.png',
+      _SourceType.bank => 'assets/source_types/bank.png',
+      _SourceType.card => 'assets/source_types/card.png',
+      _SourceType.crypto => 'assets/source_types/crypto.png',
+      _SourceType.savings => 'assets/source_types/savings.png',
+      _SourceType.investment => 'assets/source_types/investment.png',
+      _SourceType.mobileBanking => 'assets/source_types/mobile_banking.png',
+      _SourceType.other => null,
+    };
+  }
+
   String? _providerAsset(String name) {
+    return _mobileBankingAsset(name) ?? _bankProviderAsset(name);
+  }
+
+  String? _mobileBankingAsset(String name) {
     final normalized = name.toLowerCase().replaceAll(' ', '');
     if (normalized.contains('bkash')) return 'assets/providers/bkash.png';
     if (normalized.contains('nagad')) return 'assets/providers/nagad.png';
     if (normalized.contains('rocket')) return 'assets/providers/rocket.webp';
+    return null;
+  }
+
+  String? _bankProviderAsset(String name) {
+    final normalized = name.toLowerCase().replaceAll(' ', '');
     if (normalized.contains('abbank') || normalized == 'ab') {
       return 'assets/providers/ab_bank.png';
     }
