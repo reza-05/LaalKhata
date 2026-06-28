@@ -136,6 +136,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
           setState(() {
             source.archived = true;
           });
+          _persistLedger();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('${source.name} archived.')),
           );
@@ -813,22 +814,39 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (context) => _AddSourceSheet(
-        existingSourceKeys:
-            _sources.map((source) => sourceIdentityKey(source.name)).toSet(),
+        existingSourceKeys: _sources
+            .where((s) => !s.archived)
+            .map((source) => sourceIdentityKey(source.name))
+            .toSet(),
       ),
     );
 
     if (source == null || !mounted) return;
-    if (_sourceByName(source.name) != null) {
+
+    final identity = sourceIdentityKey(source.name);
+    var index = -1;
+    for (var i = 0; i < _sources.length; i++) {
+      if (sourceIdentityKey(_sources[i].name) == identity) {
+        index = i;
+        break;
+      }
+    }
+
+    if (index != -1 && !_sources[index].archived) {
       _showProfessionalMessage(
         '${source.name} already exists in your Sources.',
       );
       return;
     }
+
     final isFirstInitializedBalance = source.balance != null &&
         _sources.every((item) => item.balance == null);
     setState(() {
-      _sources.add(source);
+      if (index != -1) {
+        _sources[index] = source..archived = false;
+      } else {
+        _sources.add(source);
+      }
       if (source.balance != null) {
         if (isFirstInitializedBalance && _smsTransactionCutoffAt == null) {
           _smsTransactionCutoffAt = DateTime.now();
@@ -4170,6 +4188,14 @@ class _ProviderLogo extends StatelessWidget {
   final Color fallbackColor;
   final _SourceType? sourceType;
 
+  bool _isSpecificProvider(String name) {
+    final normalized = name.toLowerCase().replaceAll(' ', '');
+    return normalized.contains('nagad') ||
+        normalized.contains('rocket') ||
+        normalized.contains('abbank') ||
+        normalized == 'ab';
+  }
+
   @override
   Widget build(BuildContext context) {
     final asset = _assetForSource(sourceName, sourceType);
@@ -4177,27 +4203,35 @@ class _ProviderLogo extends StatelessWidget {
       return _IconBubble(icon: fallbackIcon, color: fallbackColor);
     }
 
+    final isSpecific = _isSpecificProvider(sourceName);
+    final size = isSpecific ? 42.0 : 48.0;
+    final padding = isSpecific ? 7.0 : 4.0;
+    final borderRadius = isSpecific ? 14.0 : 16.0;
+
     return Container(
-      width: 42,
-      height: 42,
-      padding: const EdgeInsets.all(7),
+      width: size,
+      height: size,
+      padding: EdgeInsets.all(padding),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(borderRadius),
         border: Border.all(color: AppColors.line),
       ),
       child: Image.asset(
         asset,
         fit: BoxFit.contain,
         errorBuilder: (context, error, stackTrace) {
-          return Icon(fallbackIcon, color: fallbackColor, size: 22);
+          return Icon(fallbackIcon, color: fallbackColor, size: isSpecific ? 22 : 26);
         },
       ),
     );
   }
 
   String? _assetForSource(String name, _SourceType? type) {
-    if (type == null) return _providerAsset(name);
+    final provider = _providerAsset(name);
+    if (provider != null) return provider;
+
+    if (type == null) return null;
 
     if (type == _SourceType.mobileBanking) {
       return _mobileBankingAsset(name) ??
@@ -4249,13 +4283,13 @@ class _IconBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 42,
-      height: 42,
+      width: 48,
+      height: 48,
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Icon(icon, color: color, size: 22),
+      child: Icon(icon, color: color, size: 26),
     );
   }
 }
