@@ -276,8 +276,9 @@ class LedgerDatabase extends _$LedgerDatabase {
     if (operation == null) return;
 
     final attempts = operation.attempts + 1;
-    final exponent = attempts.clamp(0, 8);
-    final delaySeconds = (5 * (1 << exponent)).clamp(10, 3600);
+    const retrySchedule = [1, 3, 5, 10, 30];
+    final delaySeconds =
+        retrySchedule[(attempts - 1).clamp(0, retrySchedule.length - 1)];
     await (update(localSyncOutbox)
           ..where((table) => table.operationId.equals(operationId)))
         .write(

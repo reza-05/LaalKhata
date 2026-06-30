@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/services/ledger_snapshot_repository.dart';
+import '../../../../core/services/supabase_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../ledger/domain/ledger_document.dart';
 import '../../../ledger/domain/source_identity.dart';
@@ -35,6 +37,14 @@ class PhaseOneHomePage extends ConsumerStatefulWidget {
 class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     with WidgetsBindingObserver {
   final _ledgerRepository = LedgerSnapshotRepository();
+  final _connectivity = Connectivity();
+  static const List<Duration> _syncRetrySchedule = [
+    Duration(seconds: 1),
+    Duration(seconds: 3),
+    Duration(seconds: 5),
+    Duration(seconds: 10),
+    Duration(seconds: 30),
+  ];
 
   int _selectedIndex = 0;
   bool _balanceVisible = false;
@@ -43,10 +53,18 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   bool _isAutoScanningTransactions = false;
   bool _hasHandledSmsPermission = false;
   bool _cloudSyncAvailable = true;
+  bool _hasPendingCloudSync = false;
+  bool _isSyncInProgress = false;
+  bool _hasShownOfflineSaveNotice = false;
   DateTime? _smsTransactionCutoffAt;
+  DateTime _ledgerUpdatedAt =
+      DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
   Future<void> _persistQueue = Future.value();
   Timer? _smsPollTimer;
   Timer? _cloudSyncRetryTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  int _syncRetryAttempt = 0;
+  bool? _wasConnected;
   List<SmsBalanceSuggestion> _balanceSuggestions = [];
 
   final List<MoneySource> _sources = [
@@ -81,10 +99,70 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         .fold(0.0, (total, source) => total + (source.balance ?? 0));
   }
 
+  void _listenToConnectivityChanges() {
+    unawaited(() async {
+      _wasConnected = await _hasActiveConnection();
+    }());
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
+      results,
+    ) {
+      final isConnected = _hasUsableConnectivity(results);
+      final previous = _wasConnected;
+      _wasConnected = isConnected;
+      if (isConnected && previous == false) {
+        _scheduleCloudSyncRetry(immediate: true);
+      }
+    });
+  }
+
+  bool _hasUsableConnectivity(List<ConnectivityResult> results) {
+    return results.any((result) => result != ConnectivityResult.none);
+  }
+
+  Future<bool> _hasActiveConnection() async {
+    try {
+      final results = await _connectivity.checkConnectivity();
+      return _hasUsableConnectivity(results);
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _touchLedger([DateTime? at]) {
+    _ledgerUpdatedAt = (at ?? DateTime.now()).toUtc();
+  }
+
+  void _applySyncOutcome(bool success) {
+    final previousCloudAvailability = _cloudSyncAvailable;
+    if (success) {
+      _syncRetryAttempt = 0;
+      _hasPendingCloudSync = false;
+      _hasShownOfflineSaveNotice = false;
+      if (mounted && !previousCloudAvailability) {
+        setState(() {
+          _cloudSyncAvailable = true;
+        });
+      } else {
+        _cloudSyncAvailable = true;
+      }
+      return;
+    }
+
+    _hasPendingCloudSync = true;
+    if (mounted && previousCloudAvailability) {
+      setState(() {
+        _cloudSyncAvailable = false;
+      });
+    } else {
+      _cloudSyncAvailable = false;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _listenToConnectivityChanges();
     unawaited(_loadLedger());
   }
 
@@ -93,6 +171,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     WidgetsBinding.instance.removeObserver(this);
     _smsPollTimer?.cancel();
     _cloudSyncRetryTimer?.cancel();
+    _connectivitySubscription?.cancel();
     super.dispose();
   }
 
@@ -100,7 +179,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _autoDetectTransactions();
-      _syncLedgerIfPossible();
+      _scheduleCloudSyncRetry(immediate: true);
     }
   }
 
@@ -148,9 +227,10 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         onTransfer: _showTransferDialog,
         onArchiveSource: (source) {
           setState(() {
+            _touchLedger();
             source.archived = true;
           });
-          _persistLedger();
+          unawaited(_persistLedger());
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('${source.name} archived.')),
           );
@@ -233,22 +313,28 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       if (_sources.any((source) => source.balance != null) &&
           _smsTransactionCutoffAt == null) {
         _smsTransactionCutoffAt = DateTime.now();
+        _touchLedger();
         shouldPersistCleanup = true;
       }
-      if (shouldPersistCleanup) {
-        await _persistLedger();
-      }
-      _startCloudSyncRetry();
       final cutoff = _smsTransactionCutoffAt;
       if (cutoff != null) {
         await ref
             .read(smsSuggestionManagerProvider.notifier)
             .discardBefore(cutoff);
       }
+      if (mounted) {
+        setState(() => _isLedgerLoading = false);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _initializeSmsAssistant();
+        });
+      }
+      if (shouldPersistCleanup) {
+        unawaited(_persistLedger());
+      }
     } catch (_) {
       // Keep the default local structure if saved data is not readable.
     } finally {
-      if (mounted) {
+      if (mounted && _isLedgerLoading) {
         setState(() => _isLedgerLoading = false);
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _initializeSmsAssistant();
@@ -260,18 +346,22 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   Future<void> _refreshLedgerFromCloud(String userId) async {
+    if (_isSyncInProgress) return;
+    if (!await _hasActiveConnection()) return;
     try {
       final result = await _ledgerRepository.refreshFromCloud(userId);
       if (!mounted) return;
 
       var shouldPersistCleanup = false;
-      if (result.document != null) {
+      if (result.document != null &&
+          !result.document!.updatedAt.isBefore(_ledgerUpdatedAt)) {
         shouldPersistCleanup = _applyLedgerJson(result.document!.toJson());
       }
 
       if (_sources.any((source) => source.balance != null) &&
           _smsTransactionCutoffAt == null) {
         _smsTransactionCutoffAt = DateTime.now();
+        _touchLedger();
         shouldPersistCleanup = true;
       }
 
@@ -325,59 +415,95 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   Future<void> _showCloudSyncWarningIfNeeded() async {
-    if (_cloudSyncAvailable || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Saved offline. It will sync automatically when a connection is available.',
-        ),
-      ),
+    if (!_hasPendingCloudSync || !mounted || _hasShownOfflineSaveNotice) return;
+    _hasShownOfflineSaveNotice = true;
+    _showProfessionalMessage(
+      'Saved offline. It will sync automatically when internet is available.',
     );
   }
 
-  Future<void> _saveLedgerSnapshot(Map<String, dynamic> payload) async {
+  Future<bool> _saveLedgerSnapshot(Map<String, dynamic> payload) async {
     final user = ref.read(authControllerProvider).user;
-    if (user == null) return;
-    _cloudSyncAvailable = await _ledgerRepository.save(
+    if (user == null) return false;
+    final shouldAttemptRemote =
+        SupabaseService.isConfigured && await _hasActiveConnection();
+    final success = await _ledgerRepository.save(
       user.id,
       LedgerDocument.fromJson(payload),
+      attemptRemote: shouldAttemptRemote,
     );
-    _startCloudSyncRetry();
+    _applySyncOutcome(success);
+    return success;
   }
 
   Future<void> _persistLedger() async {
     final payload = _ledgerJson();
-    _persistQueue = _persistQueue.then((_) => _saveLedgerSnapshot(payload));
+    _syncRetryAttempt = 0;
+    _persistQueue = _persistQueue.then((_) async {
+      final success = await _saveLedgerSnapshot(payload);
+      if (!success) {
+        _scheduleCloudSyncRetry();
+      }
+    });
     await _persistQueue;
   }
 
-  void _startCloudSyncRetry() {
+  void _scheduleCloudSyncRetry({bool immediate = false}) {
+    if (!mounted) return;
     _cloudSyncRetryTimer?.cancel();
-    unawaited(_syncLedgerIfPossible());
-    _cloudSyncRetryTimer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) => _syncLedgerIfPossible(),
-    );
+    if (_cloudSyncAvailable && !_hasPendingCloudSync) return;
+
+    final retryIndex =
+        _syncRetryAttempt.clamp(0, _syncRetrySchedule.length - 1);
+    final delay = immediate ? Duration.zero : _syncRetrySchedule[retryIndex];
+    _cloudSyncRetryTimer = Timer(delay, () {
+      if (!mounted) return;
+      unawaited(_syncLedgerIfPossible(triggeredByConnectivity: false));
+    });
   }
 
-  Future<void> _syncLedgerIfPossible() async {
-    if (_isLedgerLoading || !mounted) return;
-    if (_cloudSyncAvailable) return;
+  Future<void> _syncLedgerIfPossible({
+    required bool triggeredByConnectivity,
+  }) async {
+    if (_isLedgerLoading || !mounted || _isSyncInProgress) return;
+    if (_cloudSyncAvailable && !_hasPendingCloudSync) return;
 
     final user = ref.read(authControllerProvider).user;
     if (user == null) return;
+    if (!await _hasActiveConnection()) {
+      _applySyncOutcome(false);
+      _scheduleCloudSyncRetry();
+      return;
+    }
 
-    final success = await _ledgerRepository.save(
-      user.id,
-      LedgerDocument.fromJson(_ledgerJson()),
-    );
+    _isSyncInProgress = true;
+    try {
+      await _persistQueue;
+      final success = await _ledgerRepository.save(
+        user.id,
+        LedgerDocument.fromJson(_ledgerJson()),
+        attemptRemote: true,
+      );
 
-    if (!mounted) return;
-    if (success) {
-      _cloudSyncRetryTimer?.cancel();
-      setState(() {
-        _cloudSyncAvailable = true;
-      });
+      if (!mounted) return;
+      final hadPendingSync = _hasPendingCloudSync;
+      _applySyncOutcome(success);
+      if (success) {
+        _cloudSyncRetryTimer?.cancel();
+        if (hadPendingSync) {
+          _showProfessionalMessage(
+            triggeredByConnectivity
+                ? "You're back online. Your data has been updated."
+                : 'Sync completed.',
+          );
+        }
+      } else {
+        _syncRetryAttempt =
+            (_syncRetryAttempt + 1).clamp(0, _syncRetrySchedule.length - 1);
+        _scheduleCloudSyncRetry();
+      }
+    } finally {
+      _isSyncInProgress = false;
     }
   }
 
@@ -484,7 +610,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
     if (entry.type == EntryType.balanceAdjustment) {
       final previous = source.balance;
+      final changeTime = entry.date.toUtc();
       setState(() {
+        _touchLedger(changeTime);
         source.balance = entry.amount;
         _activities.insert(
           0,
@@ -527,7 +655,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     }
 
     final signedAmount = isCredit ? entry.amount : -entry.amount;
+    final changeTime = entry.date.toUtc();
     setState(() {
+      _touchLedger(changeTime);
       if (isCredit) {
         source.balance = (source.balance ?? 0) + entry.amount;
       } else {
@@ -613,7 +743,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       }
     }
 
+    final changeTime = suggestion.occurredAt.toUtc();
     setState(() {
+      _touchLedger(changeTime);
       source.balance = detectedBalance != null
           ? detectedBalance.clamp(0, double.infinity).toDouble()
           : ((source.balance ?? 0) + signedAmount)
@@ -730,6 +862,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     }
 
     setState(() {
+      _touchLedger(occurredAt.toUtc());
       from.balance = from.balance! - amount;
       to.balance = (to.balance ?? 0) + amount;
       _activities.insert(
@@ -753,8 +886,13 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
   void _showProfessionalMessage(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -773,6 +911,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     final now = DateTime.now();
 
     setState(() {
+      _touchLedger(now.toUtc());
       source.balance = balance;
       if (isFirstInitializedBalance && _smsTransactionCutoffAt == null) {
         _smsTransactionCutoffAt = now;
@@ -924,7 +1063,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
 
     final isFirstInitializedBalance = source.balance != null &&
         _sources.every((item) => item.balance == null);
+    final now = DateTime.now();
     setState(() {
+      _touchLedger(now.toUtc());
       if (index != -1) {
         _sources[index] = source..archived = false;
       } else {
@@ -932,7 +1073,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       }
       if (source.balance != null) {
         if (isFirstInitializedBalance && _smsTransactionCutoffAt == null) {
-          _smsTransactionCutoffAt = DateTime.now();
+          _smsTransactionCutoffAt = now;
         }
         _activities.insert(
           0,
@@ -940,9 +1081,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
             name: 'Opening balance',
             source: source.name,
             amount: source.balance!,
-            time: _friendlyTime(DateTime.now()),
+            time: _friendlyTime(now),
             icon: Icons.tune_rounded,
-            occurredAt: DateTime.now(),
+            occurredAt: now,
             category: 'Balance',
             type: 'openingBalance',
           ),
@@ -983,11 +1124,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       'sources': _sources.map((source) => source.toJson()).toList(),
       'activities': _activities.map((activity) => activity.toJson()).toList(),
       'smsTransactionCutoffAt': _smsTransactionCutoffAt?.toIso8601String(),
-      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      'updatedAt': _ledgerUpdatedAt.toIso8601String(),
     };
   }
 
   bool _applyLedgerJson(Map<String, dynamic> json) {
+    final documentUpdatedAt =
+        DateTime.tryParse('${json['updatedAt']}')?.toUtc() ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
     final sources = (json['sources'] as List<dynamic>?)
         ?.whereType<Map<String, dynamic>>()
         .map(MoneySource.fromJson)
@@ -1000,6 +1144,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         .toList();
     _smsTransactionCutoffAt =
         DateTime.tryParse('${json['smsTransactionCutoffAt']}');
+    _ledgerUpdatedAt = documentUpdatedAt;
 
     var removedDuplicates = false;
     if (sources != null && sources.isNotEmpty) {
@@ -1107,7 +1252,7 @@ class _MoreTab extends ConsumerWidget {
                 title: 'Cloud Sync',
                 subtitle: cloudSyncAvailable
                     ? 'Your ledger is synced across devices'
-                    : 'Database setup required for cross-device restore',
+                    : 'Local changes will sync automatically when internet is available',
                 onTap: () => _showCloudStatus(context),
               ),
               _MoreTile(
@@ -1195,7 +1340,7 @@ class _MoreTab extends ConsumerWidget {
         content: Text(
           cloudSyncAvailable
               ? 'Your latest ledger is available for cross-device restore.'
-              : 'Run the latest Supabase schema to enable cloud restore.',
+              : 'Local changes are saved on this device and will sync automatically when internet is available.',
         ),
       ),
     );

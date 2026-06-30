@@ -13,5 +13,9 @@ class LedgerLoadResult {
 abstract interface class LedgerRepository {
   Future<LedgerLoadResult> load(String userId);
 
-  Future<bool> save(String userId, LedgerDocument document);
+  Future<bool> save(
+    String userId,
+    LedgerDocument document, {
+    bool attemptRemote = true,
+  });
 }

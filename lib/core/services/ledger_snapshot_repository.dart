@@ -131,7 +131,11 @@ class LedgerSnapshotRepository implements LedgerRepository {
   }
 
   @override
-  Future<bool> save(String userId, LedgerDocument document) async {
+  Future<bool> save(
+    String userId,
+    LedgerDocument document, {
+    bool attemptRemote = true,
+  }) async {
     final payload = document.toJson();
     await _writeLocalCopies(userId, payload);
     await _queueNormalizedSync(
@@ -139,7 +143,7 @@ class LedgerSnapshotRepository implements LedgerRepository {
       document,
       expectedRevision: _knownCloudRevisions[userId],
     );
-    if (!SupabaseService.isConfigured) return false;
+    if (!SupabaseService.isConfigured || !attemptRemote) return false;
 
     try {
       await _saveCloud(userId, payload);
