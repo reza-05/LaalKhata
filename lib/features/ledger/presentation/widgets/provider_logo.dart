@@ -16,6 +16,22 @@ class ProviderLogo extends StatelessWidget {
   final Color fallbackColor;
   final SourceType? sourceType;
 
+  _LogoStyle _logoStyle(String name, SourceType? type) {
+    if (_isSpecificProvider(name)) {
+      return const _LogoStyle(size: 42, padding: 7, borderRadius: 14);
+    }
+
+    if (type == SourceType.cash) {
+      return const _LogoStyle(size: 48, padding: 7, borderRadius: 16);
+    }
+
+    if (type == SourceType.mobileBanking) {
+      return const _LogoStyle(size: 46, padding: 5, borderRadius: 15);
+    }
+
+    return const _LogoStyle(size: 48, padding: 6, borderRadius: 16);
+  }
+
   bool _isSpecificProvider(String name) {
     final normalized = name.toLowerCase().replaceAll(' ', '');
     return normalized.contains('nagad') ||
@@ -32,24 +48,23 @@ class ProviderLogo extends StatelessWidget {
     }
 
     final isSpecific = _isSpecificProvider(sourceName);
-    final size = isSpecific ? 42.0 : 48.0;
-    final padding = isSpecific ? 7.0 : 4.0;
-    final borderRadius = isSpecific ? 14.0 : 16.0;
+    final style = _logoStyle(sourceName, sourceType);
 
     return Container(
-      width: size,
-      height: size,
-      padding: EdgeInsets.all(padding),
+      width: style.size,
+      height: style.size,
+      padding: EdgeInsets.all(style.padding),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(borderRadius),
+        borderRadius: BorderRadius.circular(style.borderRadius),
         border: Border.all(color: AppColors.line),
       ),
       child: Image.asset(
         asset,
         fit: BoxFit.contain,
         errorBuilder: (context, error, stackTrace) {
-          return Icon(fallbackIcon, color: fallbackColor, size: isSpecific ? 22 : 26);
+          return Icon(fallbackIcon,
+              color: fallbackColor, size: isSpecific ? 22 : 26);
         },
       ),
     );
@@ -97,6 +112,18 @@ class ProviderLogo extends StatelessWidget {
     }
     return null;
   }
+}
+
+class _LogoStyle {
+  const _LogoStyle({
+    required this.size,
+    required this.padding,
+    required this.borderRadius,
+  });
+
+  final double size;
+  final double padding;
+  final double borderRadius;
 }
 
 class IconBubble extends StatelessWidget {

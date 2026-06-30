@@ -20,6 +20,7 @@ class HomeTab extends StatelessWidget {
     required this.activities,
     required this.balanceSuggestions,
     required this.onViewSources,
+    required this.onViewActivities,
     required this.onSetBalance,
     required this.onUseSuggestedBalance,
     required this.onEditSuggestedBalance,
@@ -35,6 +36,7 @@ class HomeTab extends StatelessWidget {
   final List<ActivityItem> activities;
   final List<SmsBalanceSuggestion> balanceSuggestions;
   final VoidCallback onViewSources;
+  final VoidCallback onViewActivities;
   final ValueChanged<MoneySource> onSetBalance;
   final ValueChanged<SmsBalanceSuggestion> onUseSuggestedBalance;
   final ValueChanged<SmsBalanceSuggestion> onEditSuggestedBalance;
@@ -42,6 +44,10 @@ class HomeTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final previewSources = sources.take(4).toList();
+    final hasMoreSources = sources.length > previewSources.length;
+    final hasMoreActivities = activities.length > 6;
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 120),
       children: [
@@ -64,18 +70,25 @@ class HomeTab extends StatelessWidget {
         ],
         SectionHeader(
           title: 'Active Sources',
-          actionLabel: 'View All',
-          onAction: onViewSources,
+          actionLabel: hasMoreSources ? 'View All' : null,
+          onAction: hasMoreSources ? onViewSources : null,
         ),
         const SizedBox(height: 10),
         ActiveSourcesCard(
-          sources: sources.take(5).toList(),
+          sources: previewSources,
           onSetBalance: onSetBalance,
         ),
         const SizedBox(height: 18),
-        const SectionHeader(title: 'Recent Activity'),
+        SectionHeader(
+          title: 'Recent Activity',
+          actionLabel: hasMoreActivities ? 'View All' : null,
+          onAction: hasMoreActivities ? onViewActivities : null,
+        ),
         const SizedBox(height: 10),
-        RecentActivityCard(activities: activities),
+        RecentActivityCard(
+          activities: activities,
+          maxItems: hasMoreActivities ? 6 : activities.length,
+        ),
       ],
     );
   }
@@ -475,9 +488,11 @@ class RecentActivityCard extends StatelessWidget {
   const RecentActivityCard({
     super.key,
     required this.activities,
+    this.maxItems = 6,
   });
 
   final List<ActivityItem> activities;
+  final int maxItems;
 
   @override
   Widget build(BuildContext context) {
@@ -518,12 +533,14 @@ class RecentActivityCard extends StatelessWidget {
       );
     }
 
+    final visibleActivities = activities.take(maxItems).toList();
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            for (final activity in activities.take(10)) ...[
+            for (final activity in visibleActivities) ...[
               Row(
                 children: [
                   IconBubble(
@@ -574,7 +591,7 @@ class RecentActivityCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (activity != activities.take(10).last) const Divider(height: 22),
+              if (activity != visibleActivities.last) const Divider(height: 22),
             ],
           ],
         ),

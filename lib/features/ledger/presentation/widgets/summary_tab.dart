@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:laalkhata/core/theme/app_colors.dart';
 import 'package:laalkhata/features/ledger/presentation/models/ledger_presentation_models.dart';
+import 'package:laalkhata/features/ledger/presentation/widgets/home_tab.dart';
 import 'package:laalkhata/features/ledger/presentation/widgets/ledger_layout_widgets.dart';
 import 'package:laalkhata/features/ledger/presentation/widgets/provider_logo.dart';
 
@@ -48,6 +49,13 @@ class SummaryTab extends StatelessWidget {
           BreakdownCard(
             title: 'Category Breakdown',
             items: _categoryBreakdown(),
+          ),
+          const SizedBox(height: 16),
+          const SectionHeader(title: 'All Activity'),
+          const SizedBox(height: 10),
+          RecentActivityCard(
+            activities: activities,
+            maxItems: 1000000,
           ),
         ],
       ],

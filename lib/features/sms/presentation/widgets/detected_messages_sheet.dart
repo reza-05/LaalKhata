@@ -32,8 +32,7 @@ class DetectedMessagesSheet extends ConsumerStatefulWidget {
       _DetectedMessagesSheetState();
 }
 
-class _DetectedMessagesSheetState
-    extends ConsumerState<DetectedMessagesSheet> {
+class _DetectedMessagesSheetState extends ConsumerState<DetectedMessagesSheet> {
   var _showIgnored = false;
   String? _message;
   bool _messageIsDanger = false;
@@ -208,7 +207,6 @@ class SmsPrivacyNotice extends StatelessWidget {
 
 class _SecurityMessage extends StatelessWidget {
   const _SecurityMessage({
-    super.key,
     required this.message,
     required this.isDanger,
   });
@@ -758,8 +756,8 @@ class IgnoredSuggestionTile extends StatelessWidget {
     return Card(
       child: ListTile(
         leading: const Icon(Icons.hide_source_outlined),
-        title:
-            Text('${suggestion.provider.label} ${formatMoney(suggestion.amount)}'),
+        title: Text(
+            '${suggestion.provider.label} ${formatMoney(suggestion.amount)}'),
         subtitle: Text(suggestion.reason),
       ),
     );

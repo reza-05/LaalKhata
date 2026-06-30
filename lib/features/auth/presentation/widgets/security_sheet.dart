@@ -463,7 +463,6 @@ class SecurityActionTile extends StatelessWidget {
 
 class _SecurityMessage extends StatelessWidget {
   const _SecurityMessage({
-    super.key,
     required this.message,
     this.isDanger = false,
   });

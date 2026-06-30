@@ -86,7 +86,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const LaalKhataMark(),
-                      SizedBox(height: compact ? 26 : 34),
+                      SizedBox(height: compact ? 22 : 28),
                       _AuthPanel(
                         child: Form(
                           key: _formKey,
@@ -116,7 +116,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                       height: 1.35,
                                     ),
                               ),
-                              const SizedBox(height: 18),
+                              const SizedBox(height: 16),
                               if (widget.setupNotice != null) ...[
                                 _MessageBanner(
                                   message: widget.setupNotice!,
@@ -274,13 +274,26 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                 },
                               ),
                               if (!_isSignUp) ...[
-                                const SizedBox(height: 6),
+                                const SizedBox(height: 2),
                                 Align(
                                   alignment: Alignment.centerRight,
                                   child: TextButton(
                                     onPressed: isLoading
                                         ? null
                                         : _openResetPasswordPage,
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 6,
+                                      ),
+                                      minimumSize: Size.zero,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                      visualDensity: const VisualDensity(
+                                        horizontal: -2,
+                                        vertical: -2,
+                                      ),
+                                    ),
                                     child: const Text('Forgot password?'),
                                   ),
                                 ),
@@ -290,7 +303,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                 _PasswordHint(
                                     password: _passwordController.text),
                               ],
-                              const SizedBox(height: 22),
+                              const SizedBox(height: 14),
                               ElevatedButton(
                                 onPressed: isLoading ? null : _submit,
                                 child: isLoading
@@ -305,25 +318,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
                                         _isSignUp ? 'Create account' : 'Login',
                                       ),
                               ),
-                              if (!_isSignUp) ...[
-                                const SizedBox(height: 12),
-                                OutlinedButton.icon(
-                                  onPressed: _showFingerprintSetupNote,
-                                  icon: const Icon(Icons.fingerprint_rounded),
-                                  label: const Text('Login with fingerprint'),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppColors.primary,
-                                    minimumSize: const Size.fromHeight(54),
-                                    side: const BorderSide(
-                                      color: AppColors.line,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(18),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(height: 16),
+                              const SizedBox(height: 14),
                               TextButton(
                                 onPressed: isLoading
                                     ? null
@@ -379,16 +374,6 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     );
   }
 
-  void _showFingerprintSetupNote() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Fingerprint unlock will be enabled after your first password login.',
-        ),
-      ),
-    );
-  }
-
   void _openResetPasswordPage() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -406,7 +391,7 @@ class _AuthPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(22),

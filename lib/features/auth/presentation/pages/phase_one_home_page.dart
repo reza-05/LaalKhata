@@ -122,6 +122,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         activities: _activities,
         balanceSuggestions: _balanceSuggestions,
         onViewSources: () => setState(() => _selectedIndex = 3),
+        onViewActivities: () => setState(() => _selectedIndex = 1),
         onSetBalance: _setSourceBalance,
         onUseSuggestedBalance: _useBalanceSuggestion,
         onEditSuggestedBalance: _editBalanceSuggestion,
@@ -1459,15 +1460,13 @@ class _SmsPermissionDialog extends StatelessWidget {
 class _SecurityMessage extends StatelessWidget {
   const _SecurityMessage({
     required this.message,
-    this.isDanger = false,
   });
 
   final String message;
-  final bool isDanger;
 
   @override
   Widget build(BuildContext context) {
-    final color = isDanger ? AppColors.danger : AppColors.primary;
+    const color = AppColors.primary;
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
