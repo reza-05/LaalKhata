@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:laalkhata/core/theme/app_colors.dart';
+import 'package:laalkhata/features/ledger/domain/source_identity.dart';
 
 enum SourceType {
   cash('Cash', Icons.payments_outlined),
@@ -55,12 +56,15 @@ class ManualEntry {
 
 class MoneySource {
   MoneySource({
-    required this.name,
+    required String name,
     required this.type,
     required this.balance,
     required this.color,
     required this.icon,
-  });
+  }) : name = normalizeSourceDisplayName(
+          name,
+          typeName: type.name,
+        );
 
   final String name;
   final SourceType type;
@@ -222,4 +226,3 @@ class TransferRequest {
   final MoneySource to;
   final double amount;
 }
-

@@ -59,29 +59,6 @@ class _AddSourceSheetState extends State<AddSourceSheet> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 12),
-              TextFormField(
-                controller: _nameController,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  labelText: 'Source name',
-                  prefixIcon: Icon(Icons.wallet_outlined),
-                ),
-                validator: (value) {
-                  final name = (value ?? '').trim();
-                  if (name.isEmpty) {
-                    return 'Source name is required.';
-                  }
-                  final identity = sourceIdentityKey(name);
-                  if (identity.isEmpty) {
-                    return 'Enter a valid source name.';
-                  }
-                  if (widget.existingSourceKeys.contains(identity)) {
-                    return 'This source already exists.';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 14),
               DropdownButtonFormField<SourceType>(
                 initialValue: _type,
                 decoration: const InputDecoration(
@@ -101,6 +78,79 @@ class _AddSourceSheetState extends State<AddSourceSheet> {
                   setState(() => _type = type);
                 },
               ),
+              if (_type == SourceType.cash) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: AppColors.line),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.payments_outlined,
+                        color: AppColors.mutedInk,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Source name',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelMedium
+                                  ?.copyWith(
+                                    color: AppColors.mutedInk,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'Cash',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyLarge
+                                  ?.copyWith(
+                                    color: AppColors.ink,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _nameController,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Source name',
+                    prefixIcon: Icon(Icons.wallet_outlined),
+                  ),
+                  validator: (value) {
+                    final name = (value ?? '').trim();
+                    if (name.isEmpty) {
+                      return 'Source name is required.';
+                    }
+                    final identity = sourceIdentityKey(name);
+                    if (identity.isEmpty) {
+                      return 'Enter a valid source name.';
+                    }
+                    if (widget.existingSourceKeys.contains(identity)) {
+                      return 'This source already exists.';
+                    }
+                    return null;
+                  },
+                ),
+              ],
               const SizedBox(height: 14),
               TextFormField(
                 controller: _balanceController,
@@ -127,7 +177,7 @@ class _AddSourceSheetState extends State<AddSourceSheet> {
                 style: Theme.of(context).textTheme.labelLarge?.copyWith(
                       color: AppColors.mutedInk,
                       fontWeight: FontWeight.w800,
-                     ),
+                    ),
               ),
               const SizedBox(height: 10),
               Wrap(
@@ -171,10 +221,12 @@ class _AddSourceSheetState extends State<AddSourceSheet> {
   void _save() {
     if (!_formKey.currentState!.validate()) return;
     final balanceText = _balanceController.text.trim();
+    final rawName = _nameController.text.trim();
+    final normalizedName = _type == SourceType.cash ? 'Cash' : rawName;
 
     Navigator.of(context).pop(
       MoneySource(
-        name: _nameController.text.trim(),
+        name: normalizedName,
         type: _type,
         balance: balanceText.isEmpty ? null : double.parse(balanceText),
         color: _color,

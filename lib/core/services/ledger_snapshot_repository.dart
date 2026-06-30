@@ -28,12 +28,7 @@ class LedgerSnapshotRepository implements LedgerRepository {
 
   @override
   Future<LedgerLoadResult> load(String userId) async {
-    final securePayload = await _readSecureSnapshot(userId);
-    final databasePayload = await _readDatabaseSnapshot(userId);
-    final localPayload = _newerOptionalPayload(
-      securePayload,
-      databasePayload,
-    );
+    final localPayload = await _readLocalPayload(userId);
     if (!SupabaseService.isConfigured) {
       return _finishLoad(
         userId,
@@ -43,6 +38,32 @@ class LedgerSnapshotRepository implements LedgerRepository {
       );
     }
 
+    return _loadWithCloud(userId, localPayload);
+  }
+
+  Future<LedgerLoadResult> loadLocal(String userId) async {
+    final localPayload = await _readLocalPayload(userId);
+    return _finishLoad(
+      userId,
+      localPayload,
+      cloudAvailable: false,
+      syncNormalized: localPayload != null,
+    );
+  }
+
+  Future<LedgerLoadResult> refreshFromCloud(String userId) async {
+    if (!SupabaseService.isConfigured) {
+      return loadLocal(userId);
+    }
+
+    final localPayload = await _readLocalPayload(userId);
+    return _loadWithCloud(userId, localPayload);
+  }
+
+  Future<LedgerLoadResult> _loadWithCloud(
+    String userId,
+    Map<String, dynamic>? localPayload,
+  ) async {
     Map<String, dynamic>? cloudPayload;
     var snapshotCloudAvailable = false;
     try {
@@ -97,6 +118,15 @@ class LedgerSnapshotRepository implements LedgerRepository {
       preferred,
       cloudAvailable: snapshotCloudAvailable || normalizedCloudAvailable,
       syncNormalized: syncNormalized,
+    );
+  }
+
+  Future<Map<String, dynamic>?> _readLocalPayload(String userId) async {
+    final securePayload = await _readSecureSnapshot(userId);
+    final databasePayload = await _readDatabaseSnapshot(userId);
+    return _newerOptionalPayload(
+      securePayload,
+      databasePayload,
     );
   }
 

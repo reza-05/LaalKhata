@@ -21,6 +21,7 @@ class HomeTab extends StatelessWidget {
     required this.balanceSuggestions,
     required this.onViewSources,
     required this.onViewActivities,
+    required this.onAddSource,
     required this.onSetBalance,
     required this.onUseSuggestedBalance,
     required this.onEditSuggestedBalance,
@@ -37,6 +38,7 @@ class HomeTab extends StatelessWidget {
   final List<SmsBalanceSuggestion> balanceSuggestions;
   final VoidCallback onViewSources;
   final VoidCallback onViewActivities;
+  final VoidCallback onAddSource;
   final ValueChanged<MoneySource> onSetBalance;
   final ValueChanged<SmsBalanceSuggestion> onUseSuggestedBalance;
   final ValueChanged<SmsBalanceSuggestion> onEditSuggestedBalance;
@@ -44,9 +46,10 @@ class HomeTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    const activityPreviewCount = 8;
     final previewSources = sources.take(4).toList();
     final hasMoreSources = sources.length > previewSources.length;
-    final hasMoreActivities = activities.length > 6;
+    final hasMoreActivities = activities.length > activityPreviewCount;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 120),
@@ -70,12 +73,17 @@ class HomeTab extends StatelessWidget {
         ],
         SectionHeader(
           title: 'Active Sources',
-          actionLabel: hasMoreSources ? 'View All' : null,
-          onAction: hasMoreSources ? onViewSources : null,
+          actionLabel: sources.isEmpty
+              ? 'Add Source'
+              : (hasMoreSources ? 'View All' : null),
+          onAction: sources.isEmpty
+              ? onAddSource
+              : (hasMoreSources ? onViewSources : null),
         ),
         const SizedBox(height: 10),
         ActiveSourcesCard(
           sources: previewSources,
+          onAddSource: onAddSource,
           onSetBalance: onSetBalance,
         ),
         const SizedBox(height: 18),
@@ -87,7 +95,8 @@ class HomeTab extends StatelessWidget {
         const SizedBox(height: 10),
         RecentActivityCard(
           activities: activities,
-          maxItems: hasMoreActivities ? 6 : activities.length,
+          maxItems:
+              hasMoreActivities ? activityPreviewCount : activities.length,
         ),
       ],
     );
@@ -453,14 +462,59 @@ class ActiveSourcesCard extends StatelessWidget {
   const ActiveSourcesCard({
     super.key,
     required this.sources,
+    required this.onAddSource,
     required this.onSetBalance,
   });
 
   final List<MoneySource> sources;
+  final VoidCallback onAddSource;
   final ValueChanged<MoneySource> onSetBalance;
 
   @override
   Widget build(BuildContext context) {
+    if (sources.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.altSurface,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: AppColors.line),
+        ),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.account_balance_wallet_outlined,
+              size: 40,
+              color: AppColors.mutedInk,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'No active sources found',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.ink,
+                  ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Add a wallet, bank, or card to start tracking balances here.',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: AppColors.mutedInk,
+                  ),
+            ),
+            const SizedBox(height: 14),
+            FilledButton.icon(
+              onPressed: onAddSource,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add Source'),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),

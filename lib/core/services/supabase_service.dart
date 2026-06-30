@@ -26,6 +26,13 @@ class SupabaseService {
         return;
       }
 
+      if (data.event == AuthChangeEvent.initialSession ||
+          data.event == AuthChangeEvent.signedIn ||
+          data.event == AuthChangeEvent.tokenRefreshed ||
+          data.event == AuthChangeEvent.userUpdated) {
+        PasswordRecoverySignal.authEventVersion.value++;
+      }
+
       if (data.event == AuthChangeEvent.signedIn) {
         final confirmedFromEmail =
             PasswordRecoverySignal.confirmEmailIfCallbackPending();

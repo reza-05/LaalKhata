@@ -46,6 +46,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   DateTime? _smsTransactionCutoffAt;
   Future<void> _persistQueue = Future.value();
   Timer? _smsPollTimer;
+  Timer? _cloudSyncRetryTimer;
   List<SmsBalanceSuggestion> _balanceSuggestions = [];
 
   final List<MoneySource> _sources = [
@@ -84,13 +85,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadLedger();
+    unawaited(_loadLedger());
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _smsPollTimer?.cancel();
+    _cloudSyncRetryTimer?.cancel();
     super.dispose();
   }
 
@@ -98,6 +100,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _autoDetectTransactions();
+      _syncLedgerIfPossible();
     }
   }
 
@@ -123,6 +126,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         balanceSuggestions: _balanceSuggestions,
         onViewSources: () => setState(() => _selectedIndex = 3),
         onViewActivities: () => setState(() => _selectedIndex = 1),
+        onAddSource: _showAddSourceSheet,
         onSetBalance: _setSourceBalance,
         onUseSuggestedBalance: _useBalanceSuggestion,
         onEditSuggestedBalance: _editBalanceSuggestion,
@@ -135,6 +139,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       AddTransactionTab(
         sources: _sources.where((source) => !source.archived).toList(),
         onSave: _saveManualEntry,
+        onAddSource: _showAddSourceSheet,
       ),
       SourcesTab(
         sources: _sources,
@@ -155,7 +160,6 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         sources: _sources,
         activities: _activities,
         onConfirmSuggestion: _confirmSmsSuggestion,
-        onUseDetectedBalance: _useDetectedBalance,
         cloudSyncAvailable: _cloudSyncAvailable,
         onSignOut: () => ref.read(authControllerProvider.notifier).signOut(),
       ),
@@ -209,12 +213,17 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   }
 
   Future<void> _loadLedger() async {
-    try {
-      final user = ref.read(authControllerProvider).user;
-      if (user == null) return;
+    final user = ref.read(authControllerProvider).user;
+    if (user == null) {
+      if (mounted) {
+        setState(() => _isLedgerLoading = false);
+      }
+      return;
+    }
 
+    try {
       await ref.read(smsSuggestionManagerProvider.notifier).switchUser(user.id);
-      final result = await _ledgerRepository.load(user.id);
+      final result = await _ledgerRepository.loadLocal(user.id);
       _cloudSyncAvailable = result.cloudAvailable;
       var shouldPersistCleanup = false;
       if (result.document != null) {
@@ -229,6 +238,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       if (shouldPersistCleanup) {
         await _persistLedger();
       }
+      _startCloudSyncRetry();
       final cutoff = _smsTransactionCutoffAt;
       if (cutoff != null) {
         await ref
@@ -244,6 +254,36 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
           _initializeSmsAssistant();
         });
       }
+    }
+
+    unawaited(_refreshLedgerFromCloud(user.id));
+  }
+
+  Future<void> _refreshLedgerFromCloud(String userId) async {
+    try {
+      final result = await _ledgerRepository.refreshFromCloud(userId);
+      if (!mounted) return;
+
+      var shouldPersistCleanup = false;
+      if (result.document != null) {
+        shouldPersistCleanup = _applyLedgerJson(result.document!.toJson());
+      }
+
+      if (_sources.any((source) => source.balance != null) &&
+          _smsTransactionCutoffAt == null) {
+        _smsTransactionCutoffAt = DateTime.now();
+        shouldPersistCleanup = true;
+      }
+
+      setState(() {
+        _cloudSyncAvailable = result.cloudAvailable;
+      });
+
+      if (shouldPersistCleanup) {
+        await _persistLedger();
+      }
+    } catch (_) {
+      // Local-first mode keeps working even if cloud refresh fails.
     }
   }
 
@@ -289,7 +329,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text(
-          'Saved on this device. Cloud sync needs the latest database setup.',
+          'Saved offline. It will sync automatically when a connection is available.',
         ),
       ),
     );
@@ -302,12 +342,43 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       user.id,
       LedgerDocument.fromJson(payload),
     );
+    _startCloudSyncRetry();
   }
 
   Future<void> _persistLedger() async {
     final payload = _ledgerJson();
     _persistQueue = _persistQueue.then((_) => _saveLedgerSnapshot(payload));
     await _persistQueue;
+  }
+
+  void _startCloudSyncRetry() {
+    _cloudSyncRetryTimer?.cancel();
+    unawaited(_syncLedgerIfPossible());
+    _cloudSyncRetryTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _syncLedgerIfPossible(),
+    );
+  }
+
+  Future<void> _syncLedgerIfPossible() async {
+    if (_isLedgerLoading || !mounted) return;
+    if (_cloudSyncAvailable) return;
+
+    final user = ref.read(authControllerProvider).user;
+    if (user == null) return;
+
+    final success = await _ledgerRepository.save(
+      user.id,
+      LedgerDocument.fromJson(_ledgerJson()),
+    );
+
+    if (!mounted) return;
+    if (success) {
+      _cloudSyncRetryTimer?.cancel();
+      setState(() {
+        _cloudSyncAvailable = true;
+      });
+    }
   }
 
   Future<void> _autoDetectOpeningBalances() async {
@@ -520,12 +591,13 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     SmsTransactionSuggestion suggestion,
   ) async {
     final source = _sourceForName(suggestion.sourceName);
+    final detectedBalance = suggestion.detectedBalance;
     final signedAmount = suggestion.direction == SmsTransactionDirection.credit
         ? suggestion.amount
         : -suggestion.amount;
     ShortfallResolution? shortfall;
 
-    if (signedAmount < 0) {
+    if (detectedBalance == null && signedAmount < 0) {
       if (source.balance == null) {
         _showProfessionalMessage(
           'Set ${source.name} balance before confirming this transaction.',
@@ -542,9 +614,11 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     }
 
     setState(() {
-      source.balance = ((source.balance ?? 0) + signedAmount)
-          .clamp(0, double.infinity)
-          .toDouble();
+      source.balance = detectedBalance != null
+          ? detectedBalance.clamp(0, double.infinity).toDouble()
+          : ((source.balance ?? 0) + signedAmount)
+              .clamp(0, double.infinity)
+              .toDouble();
       final coverSource = shortfall?.coverSource;
       if (coverSource != null) {
         coverSource.balance = (coverSource.balance! - shortfall!.deficit)
@@ -966,7 +1040,6 @@ class _MoreTab extends ConsumerWidget {
     required this.sources,
     required this.activities,
     required this.onConfirmSuggestion,
-    required this.onUseDetectedBalance,
     required this.cloudSyncAvailable,
     required this.onSignOut,
   });
@@ -975,11 +1048,6 @@ class _MoreTab extends ConsumerWidget {
   final List<ActivityItem> activities;
   final Future<bool> Function(SmsTransactionSuggestion suggestion)
       onConfirmSuggestion;
-  final void Function({
-    required String sourceName,
-    required double balance,
-    required bool wasUnset,
-  }) onUseDetectedBalance;
   final bool cloudSyncAvailable;
   final VoidCallback onSignOut;
 
@@ -1105,7 +1173,6 @@ class _MoreTab extends ConsumerWidget {
         sources: sources,
         activities: activities,
         onConfirmSuggestion: onConfirmSuggestion,
-        onUseDetectedBalance: onUseDetectedBalance,
       ),
     );
   }

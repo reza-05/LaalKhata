@@ -20,3 +20,34 @@ String sourceIdentityKey(String name) {
   }
   return compact;
 }
+
+String normalizeSourceDisplayName(
+  String name, {
+  String? typeName,
+}) {
+  final trimmed = name.trim();
+  final identity = sourceIdentityKey(trimmed);
+  if (identity.isEmpty) return trimmed;
+
+  if (typeName == 'cash' || identity == 'cash') {
+    return 'Cash';
+  }
+
+  return switch (identity) {
+    'bkash' => 'bKash',
+    'nagad' => 'Nagad',
+    'rocket' => 'Rocket',
+    'abbank' => 'AB Bank',
+    _ => _toTitleCase(trimmed),
+  };
+}
+
+String _toTitleCase(String value) {
+  return value
+      .split(RegExp(r'\s+'))
+      .where((part) => part.isNotEmpty)
+      .map(
+        (part) => part[0].toUpperCase() + part.substring(1).toLowerCase(),
+      )
+      .join(' ');
+}

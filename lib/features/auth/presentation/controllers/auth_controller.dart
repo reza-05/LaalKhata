@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/errors/app_failure.dart';
 import '../../../../core/services/biometric_auth_service.dart';
+import '../../../../core/services/cached_auth_user_service.dart';
 import '../../../../core/services/local_pin_service.dart';
 import '../../data/supabase_auth_repository.dart';
 import '../../domain/auth_repository.dart';
@@ -12,9 +13,16 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return const SupabaseAuthRepository();
 });
 
+final cachedAuthUserServiceProvider = Provider<CachedAuthUserService>((ref) {
+  return CachedAuthUserService();
+});
+
 final authControllerProvider =
     StateNotifierProvider<AuthController, AuthState>((ref) {
-  return AuthController(ref.watch(authRepositoryProvider))..loadSession();
+  return AuthController(
+    ref.watch(authRepositoryProvider),
+    ref.watch(cachedAuthUserServiceProvider),
+  );
 });
 
 final biometricAuthServiceProvider = Provider<BiometricAuthService>((ref) {
@@ -26,16 +34,29 @@ final localPinServiceProvider = Provider<LocalPinService>((ref) {
 });
 
 class AuthController extends StateNotifier<AuthState> {
-  AuthController(this._repository) : super(const AuthState.idle());
+  AuthController(this._repository, this._cachedAuthUserService)
+      : super(const AuthState.idle());
 
   final AuthRepository _repository;
+  final CachedAuthUserService _cachedAuthUserService;
 
-  void loadSession() {
+  Future<void> loadSession() async {
     final user = _repository.currentUser;
+    if (user != null) {
+      await _cachedAuthUserService.writeUser(user);
+      state = AuthState(
+        status: AuthStatus.authenticated,
+        user: user,
+      );
+      return;
+    }
+
+    final cachedUser = await _cachedAuthUserService.readUser();
     state = AuthState(
-      status:
-          user == null ? AuthStatus.unauthenticated : AuthStatus.authenticated,
-      user: user,
+      status: cachedUser == null
+          ? AuthStatus.unauthenticated
+          : AuthStatus.authenticated,
+      user: cachedUser,
     );
   }
 
@@ -59,7 +80,7 @@ class AuthController extends StateNotifier<AuthState> {
         studentId: studentId,
         batch: batch,
       );
-      loadSession();
+      await loadSession();
       if (state.status == AuthStatus.unauthenticated) {
         state = const AuthState(
           status: AuthStatus.unauthenticated,
@@ -81,7 +102,7 @@ class AuthController extends StateNotifier<AuthState> {
     state = state.copyWith(status: AuthStatus.loading, message: null);
     try {
       await _repository.signIn(email: email, password: password);
-      loadSession();
+      await loadSession();
     } catch (error) {
       if (kDebugMode) {
         debugPrint('Password reset request failed: $error');
@@ -117,7 +138,7 @@ class AuthController extends StateNotifier<AuthState> {
     state = state.copyWith(status: AuthStatus.loading, message: null);
     try {
       await _repository.updatePassword(password: password);
-      loadSession();
+      await loadSession();
       state = state.copyWith(
         status: AuthStatus.authenticated,
         message: 'Password updated successfully.',
@@ -135,6 +156,7 @@ class AuthController extends StateNotifier<AuthState> {
     state = state.copyWith(status: AuthStatus.loading, message: null);
     try {
       await _repository.signOut();
+      await _cachedAuthUserService.clear();
       state = const AuthState(status: AuthStatus.unauthenticated);
     } catch (error) {
       state = AuthState(

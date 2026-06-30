@@ -179,9 +179,9 @@ class SourcesTab extends StatelessWidget {
                           icon: const Icon(Icons.edit_rounded),
                         ),
                         IconButton(
-                          tooltip: 'Archive source',
+                          tooltip: 'Delete source',
                           onPressed: () => onArchiveSource(source),
-                          icon: const Icon(Icons.archive_outlined),
+                          icon: const Icon(Icons.delete_outline_rounded),
                         ),
                       ],
                     ),

@@ -2,11 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:laalkhata/core/theme/app_colors.dart';
 import 'package:laalkhata/features/sms/data/sms_suggestion_manager.dart';
-import 'package:laalkhata/features/sms/domain/balance_initializer.dart';
 import 'package:laalkhata/features/sms/domain/sms_transaction_models.dart';
 import 'package:laalkhata/features/ledger/presentation/models/ledger_presentation_models.dart';
 import 'package:laalkhata/features/ledger/presentation/widgets/provider_logo.dart';
-import 'package:laalkhata/features/ledger/presentation/widgets/ledger_dialogs.dart';
 
 class DetectedMessagesSheet extends ConsumerStatefulWidget {
   const DetectedMessagesSheet({
@@ -14,18 +12,12 @@ class DetectedMessagesSheet extends ConsumerStatefulWidget {
     required this.sources,
     required this.activities,
     required this.onConfirmSuggestion,
-    required this.onUseDetectedBalance,
   });
 
   final List<MoneySource> sources;
   final List<ActivityItem> activities;
   final Future<bool> Function(SmsTransactionSuggestion suggestion)
       onConfirmSuggestion;
-  final void Function({
-    required String sourceName,
-    required double balance,
-    required bool wasUnset,
-  }) onUseDetectedBalance;
 
   @override
   ConsumerState<DetectedMessagesSheet> createState() =>
@@ -121,7 +113,6 @@ class _DetectedMessagesSheetState extends ConsumerState<DetectedMessagesSheet> {
                     onConfirm: (updatedSuggestion) =>
                         _confirmSuggestion(manager, updatedSuggestion),
                     onIgnore: () => _ignoreSuggestion(manager, suggestion.id),
-                    onUseDetectedBalance: widget.onUseDetectedBalance,
                   ),
                 const SizedBox(height: 12),
               ],
@@ -271,7 +262,6 @@ class SmsSuggestionCard extends StatefulWidget {
     required this.currentBalance,
     required this.onConfirm,
     required this.onIgnore,
-    required this.onUseDetectedBalance,
   });
 
   final SmsTransactionSuggestion suggestion;
@@ -279,23 +269,211 @@ class SmsSuggestionCard extends StatefulWidget {
   final double? currentBalance;
   final Future<void> Function(SmsTransactionSuggestion suggestion) onConfirm;
   final VoidCallback onIgnore;
-  final void Function({
-    required String sourceName,
-    required double balance,
-    required bool wasUnset,
-  }) onUseDetectedBalance;
 
   @override
   State<SmsSuggestionCard> createState() => _SmsSuggestionCardState();
 }
 
 class _SmsSuggestionCardState extends State<SmsSuggestionCard> {
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(24),
+        onTap: _showReviewSheet,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  ProviderLogo(
+                    sourceName: widget.suggestion.sourceName,
+                    fallbackIcon: Icons.receipt_long_outlined,
+                    fallbackColor: widget.suggestion.direction ==
+                            SmsTransactionDirection.credit
+                        ? AppColors.positive
+                        : AppColors.primary,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${widget.suggestion.provider.label} Transaction Detected',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _formatDetectedTime(widget.suggestion.occurredAt),
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppColors.mutedInk,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.mutedInk,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _SummaryChip(
+                    icon: widget.suggestion.direction ==
+                            SmsTransactionDirection.credit
+                        ? Icons.south_west_rounded
+                        : Icons.north_east_rounded,
+                    label: widget.suggestion.direction.label,
+                  ),
+                  _SummaryChip(
+                    icon: Icons.payments_outlined,
+                    label: formatMoney(widget.suggestion.amount),
+                    highlight: true,
+                  ),
+                  _SummaryChip(
+                    icon: Icons.account_balance_wallet_outlined,
+                    label: widget.suggestion.sourceName,
+                  ),
+                ],
+              ),
+              if (widget.suggestion.detectedBalance != null) ...[
+                const SizedBox(height: 10),
+                _CompactInfoRow(
+                  icon: Icons.account_balance_rounded,
+                  label:
+                      'Detected balance: ${formatMoney(widget.suggestion.detectedBalance!)}',
+                ),
+              ],
+              if (widget.suggestion.duplicateWarning) ...[
+                const SizedBox(height: 10),
+                const DuplicateWarningBanner(compact: true),
+              ],
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  'Tap to review',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatDetectedTime(DateTime value) {
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '${value.day}/${value.month}/${value.year}, $hour:$minute';
+  }
+
+  Future<void> _showReviewSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => FractionallySizedBox(
+        heightFactor: 0.9,
+        child: _SuggestionReviewSheet(
+          suggestion: widget.suggestion,
+          sources: widget.sources,
+          currentBalance: widget.currentBalance,
+          onConfirm: widget.onConfirm,
+          onIgnore: widget.onIgnore,
+        ),
+      ),
+    );
+  }
+}
+
+class DuplicateWarningBanner extends StatelessWidget {
+  const DuplicateWarningBanner({
+    super.key,
+    this.compact = false,
+  });
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: compact ? 10 : 12,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.warning.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            size: compact ? 18 : 20,
+            color: AppColors.warning,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Similar transaction already exists. Confirming may create a duplicate.',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: AppColors.ink,
+                    fontWeight: FontWeight.w800,
+                    height: compact ? 1.25 : 1.35,
+                  ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SuggestionReviewSheet extends StatefulWidget {
+  const _SuggestionReviewSheet({
+    required this.suggestion,
+    required this.sources,
+    required this.currentBalance,
+    required this.onConfirm,
+    required this.onIgnore,
+  });
+
+  final SmsTransactionSuggestion suggestion;
+  final List<MoneySource> sources;
+  final double? currentBalance;
+  final Future<void> Function(SmsTransactionSuggestion suggestion) onConfirm;
+  final VoidCallback onIgnore;
+
+  @override
+  State<_SuggestionReviewSheet> createState() => _SuggestionReviewSheetState();
+}
+
+class _SuggestionReviewSheetState extends State<_SuggestionReviewSheet> {
   late final TextEditingController _reasonController;
   late final TextEditingController _amountController;
   late String _sourceName;
   late SmsTransactionDirection _direction;
-  var _balancePromptDismissed = false;
-  final _balanceInitializer = const SmsBalanceInitializer();
 
   @override
   void initState() {
@@ -325,161 +503,217 @@ class _SmsSuggestionCardState extends State<SmsSuggestionCard> {
   Widget build(BuildContext context) {
     final amount = double.tryParse(_amountController.text.trim()) ?? 0;
     final detectedBalance = widget.suggestion.detectedBalance;
-    final currentBalance = _currentBalance;
-    final canSuggestBalance = !_balancePromptDismissed &&
-        _balanceInitializer.canSuggestOpeningBalance(
-          suggestion: widget.suggestion,
-          currentBalance: currentBalance,
-        );
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      child: SafeArea(
+        top: false,
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                ProviderLogo(
-                  sourceName: widget.suggestion.sourceName,
-                  fallbackIcon: Icons.receipt_long_outlined,
-                  fallbackColor: _direction == SmsTransactionDirection.credit
-                      ? AppColors.positive
-                      : AppColors.primary,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${widget.suggestion.provider.label} Transaction Detected',
-                        style:
-                            Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w900,
-                                ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _formatDetectedTime(widget.suggestion.occurredAt),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: AppColors.mutedInk,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
+            const SizedBox(height: 10),
+            Container(
+              width: 52,
+              height: 5,
+              decoration: BoxDecoration(
+                color: AppColors.line,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 120),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        ProviderLogo(
+                          sourceName: widget.suggestion.sourceName,
+                          fallbackIcon: Icons.receipt_long_outlined,
+                          fallbackColor: widget.suggestion.direction ==
+                                  SmsTransactionDirection.credit
+                              ? AppColors.positive
+                              : AppColors.primary,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${widget.suggestion.provider.label} Transaction Detected',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Review the details before saving this transaction.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.mutedInk,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    _ReviewSummaryCard(
+                      sourceName: _sourceName,
+                      direction: _direction,
+                      amount: amount,
+                      detectedBalance: detectedBalance,
+                      occurredAt: widget.suggestion.occurredAt,
+                    ),
+                    if (widget.suggestion.duplicateWarning) ...[
+                      const SizedBox(height: 12),
+                      const DuplicateWarningBanner(compact: true),
                     ],
-                  ),
-                ),
-              ],
-            ),
-            if (widget.suggestion.duplicateWarning) ...[
-              const SizedBox(height: 12),
-              const DuplicateWarningBanner(),
-            ],
-            if (canSuggestBalance && detectedBalance != null) ...[
-              const SizedBox(height: 12),
-              DetectedBalancePrompt(
-                sourceName: _sourceName,
-                balance: detectedBalance,
-                onUse: () => widget.onUseDetectedBalance(
-                  sourceName: _sourceName,
-                  balance: detectedBalance,
-                  wasUnset: true,
-                ),
-                onEdit: () => _editDetectedBalance(detectedBalance),
-                onIgnore: () => setState(() => _balancePromptDismissed = true),
-              ),
-            ],
-            const SizedBox(height: 14),
-            TextFormField(
-              controller: _reasonController,
-              decoration: const InputDecoration(
-                labelText: 'Reason',
-                prefixIcon: Icon(Icons.edit_note_outlined),
-              ),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              initialValue: _sourceName,
-              decoration: const InputDecoration(
-                labelText: 'Source',
-                prefixIcon: Icon(Icons.account_balance_wallet_outlined),
-              ),
-              items: _sourceOptions
-                  .map(
-                    (source) => DropdownMenuItem(
-                      value: source,
-                      child: Text(source),
+                    const SizedBox(height: 14),
+                    Theme(
+                      data: Theme.of(context).copyWith(
+                        dividerColor: Colors.transparent,
+                      ),
+                      child: ExpansionTile(
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: EdgeInsets.zero,
+                        shape: const Border(),
+                        collapsedShape: const Border(),
+                        title: Text(
+                          'Edit Details',
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                        ),
+                        subtitle: Text(
+                          'Reason, source, amount, and type',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppColors.mutedInk,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                        ),
+                        children: [
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _reasonController,
+                            decoration: const InputDecoration(
+                              labelText: 'Reason',
+                              prefixIcon: Icon(Icons.edit_note_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String>(
+                            initialValue: _sourceName,
+                            decoration: const InputDecoration(
+                              labelText: 'Source',
+                              prefixIcon:
+                                  Icon(Icons.account_balance_wallet_outlined),
+                            ),
+                            items: _sourceOptions
+                                .map(
+                                  (source) => DropdownMenuItem(
+                                    value: source,
+                                    child: Text(source),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _sourceName = value);
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _amountController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Amount',
+                              prefixText: '৳ ',
+                              prefixIcon: Icon(Icons.payments_outlined),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<SmsTransactionDirection>(
+                            initialValue: _direction,
+                            decoration: const InputDecoration(
+                              labelText: 'Transaction Type',
+                              prefixIcon: Icon(Icons.swap_vert_rounded),
+                            ),
+                            items: SmsTransactionDirection.values
+                                .map(
+                                  (direction) => DropdownMenuItem(
+                                    value: direction,
+                                    child: Text(direction.label),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (value) {
+                              if (value == null) return;
+                              setState(() => _direction = value);
+                            },
+                          ),
+                        ],
+                      ),
                     ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => _sourceName = value);
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _amountController,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                prefixText: '৳ ',
-                prefixIcon: Icon(Icons.payments_outlined),
-              ),
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<SmsTransactionDirection>(
-              initialValue: _direction,
-              decoration: const InputDecoration(
-                labelText: 'Transaction Type',
-                prefixIcon: Icon(Icons.swap_vert_rounded),
-              ),
-              items: SmsTransactionDirection.values
-                  .map(
-                    (direction) => DropdownMenuItem(
-                      value: direction,
-                      child: Text(direction.label),
+                    const SizedBox(height: 12),
+                    BalancePreview(
+                      currentBalance: _currentBalance,
+                      sourceName: _sourceName,
+                      amount: amount,
+                      direction: _direction,
+                      detectedBalance: detectedBalance,
                     ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                if (value == null) return;
-                setState(() => _direction = value);
-              },
-            ),
-            if (detectedBalance != null) ...[
-              const SizedBox(height: 12),
-              ReadonlyField(
-                label: 'Detected Balance',
-                value: formatMoney(detectedBalance),
+                  ],
+                ),
               ),
-            ],
-            const SizedBox(height: 12),
-            BalancePreview(
-              currentBalance: currentBalance,
-              sourceName: _sourceName,
-              amount: amount,
-              direction: _direction,
             ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: widget.onIgnore,
-                    child: const Text('Ignore'),
-                  ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 18),
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                border: Border(
+                  top: BorderSide(color: AppColors.line.withValues(alpha: 0.8)),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: amount <= 0 ? null : _confirm,
-                    child: const Text('Confirm'),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 20,
+                    offset: const Offset(0, -6),
                   ),
-                ),
-              ],
+                ],
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _ignore,
+                      child: const Text('Ignore'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: amount <= 0 ? null : _confirm,
+                      child: const Text('Confirm'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -535,61 +769,20 @@ class _SmsSuggestionCardState extends State<SmsSuggestionCard> {
           ],
         ),
       );
-      if (shouldContinue != true) return;
+      if (shouldContinue != true || !mounted) return;
     }
 
     await widget.onConfirm(updated);
+    if (mounted) Navigator.of(context).pop();
   }
 
-  Future<void> _editDetectedBalance(double detectedBalance) async {
-    final edited = await showDialog<double>(
-      context: context,
-      builder: (context) => BalanceEditorDialog(
-        title: 'Edit Detected Balance',
-        initialBalance: detectedBalance,
-        confirmLabel: 'Use Balance',
-      ),
-    );
-
-    if (edited == null || edited < 0) return;
-    widget.onUseDetectedBalance(
-      sourceName: _sourceName,
-      balance: edited,
-      wasUnset: _currentBalance == null,
-    );
+  void _ignore() {
+    widget.onIgnore();
+    Navigator.of(context).pop();
   }
 
   void _refresh() {
     if (mounted) setState(() {});
-  }
-
-  String _formatDetectedTime(DateTime value) {
-    final hour = value.hour.toString().padLeft(2, '0');
-    final minute = value.minute.toString().padLeft(2, '0');
-    return '${value.day}/${value.month}/${value.year}, $hour:$minute';
-  }
-}
-
-class DuplicateWarningBanner extends StatelessWidget {
-  const DuplicateWarningBanner({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.warning.withValues(alpha: 0.25)),
-      ),
-      child: Text(
-        'Similar transaction already exists. Confirming may create a duplicate.',
-        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: AppColors.ink,
-              fontWeight: FontWeight.w800,
-            ),
-      ),
-    );
   }
 }
 
@@ -708,20 +901,23 @@ class BalancePreview extends StatelessWidget {
     required this.sourceName,
     required this.amount,
     required this.direction,
+    this.detectedBalance,
   });
 
   final double? currentBalance;
   final String sourceName;
   final double amount;
   final SmsTransactionDirection direction;
+  final double? detectedBalance;
 
   @override
   Widget build(BuildContext context) {
-    final preview = currentBalance == null
-        ? null
-        : direction == SmsTransactionDirection.credit
-            ? currentBalance! + amount
-            : currentBalance! - amount;
+    final preview = detectedBalance ??
+        (currentBalance == null
+            ? null
+            : direction == SmsTransactionDirection.credit
+                ? currentBalance! + amount
+                : currentBalance! - amount);
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -731,9 +927,11 @@ class BalancePreview extends StatelessWidget {
         border: Border.all(color: AppColors.line),
       ),
       child: Text(
-        preview == null
-            ? '$sourceName balance preview: Balance not set'
-            : '$sourceName balance preview: ${formatMoney(preview)}',
+        detectedBalance != null
+            ? '$sourceName balance after confirm: ${formatMoney(detectedBalance!)}'
+            : preview == null
+                ? '$sourceName balance preview: Balance not set'
+                : '$sourceName balance preview: ${formatMoney(preview)}',
         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: AppColors.mutedInk,
               fontWeight: FontWeight.w800,
@@ -759,6 +957,148 @@ class IgnoredSuggestionTile extends StatelessWidget {
         title: Text(
             '${suggestion.provider.label} ${formatMoney(suggestion.amount)}'),
         subtitle: Text(suggestion.reason),
+      ),
+    );
+  }
+}
+
+class _SummaryChip extends StatelessWidget {
+  const _SummaryChip({
+    required this.icon,
+    required this.label,
+    this.highlight = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: highlight
+            ? AppColors.primary.withValues(alpha: 0.08)
+            : AppColors.altSurface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: highlight
+              ? AppColors.primary.withValues(alpha: 0.14)
+              : AppColors.line,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 16,
+            color: highlight ? AppColors.primary : AppColors.mutedInk,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.ink,
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactInfoRow extends StatelessWidget {
+  const _CompactInfoRow({
+    required this.icon,
+    required this.label,
+  });
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: AppColors.mutedInk),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.mutedInk,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ReviewSummaryCard extends StatelessWidget {
+  const _ReviewSummaryCard({
+    required this.sourceName,
+    required this.direction,
+    required this.amount,
+    required this.detectedBalance,
+    required this.occurredAt,
+  });
+
+  final String sourceName;
+  final SmsTransactionDirection direction;
+  final double amount;
+  final double? detectedBalance;
+  final DateTime occurredAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final hour = occurredAt.hour.toString().padLeft(2, '0');
+    final minute = occurredAt.minute.toString().padLeft(2, '0');
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.altSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _CompactInfoRow(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'Source: $sourceName',
+          ),
+          const SizedBox(height: 10),
+          _CompactInfoRow(
+            icon: direction == SmsTransactionDirection.credit
+                ? Icons.south_west_rounded
+                : Icons.north_east_rounded,
+            label: 'Transaction type: ${direction.label}',
+          ),
+          const SizedBox(height: 10),
+          _CompactInfoRow(
+            icon: Icons.payments_outlined,
+            label: 'Amount: ${formatMoney(amount)}',
+          ),
+          if (detectedBalance != null) ...[
+            const SizedBox(height: 10),
+            _CompactInfoRow(
+              icon: Icons.account_balance_rounded,
+              label: 'Detected balance: ${formatMoney(detectedBalance!)}',
+            ),
+          ],
+          const SizedBox(height: 10),
+          _CompactInfoRow(
+            icon: Icons.schedule_rounded,
+            label:
+                'Date & time: ${occurredAt.day}/${occurredAt.month}/${occurredAt.year}, $hour:$minute',
+          ),
+        ],
       ),
     );
   }

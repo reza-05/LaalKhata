@@ -21,12 +21,14 @@ class AuthGate extends ConsumerStatefulWidget {
 class _AuthGateState extends ConsumerState<AuthGate>
     with WidgetsBindingObserver {
   bool _localUnlocked = false;
+  bool _isBootstrapping = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     PasswordRecoverySignal.authEventVersion.addListener(_handleAuthEvent);
+    _bootstrap();
   }
 
   @override
@@ -57,9 +59,23 @@ class _AuthGateState extends ConsumerState<AuthGate>
     if (mounted) setState(() {});
   }
 
+  Future<void> _bootstrap() async {
+    await ref.read(authControllerProvider.notifier).loadSession();
+    if (!mounted) return;
+    setState(() {
+      _isBootstrapping = false;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
+
+    if (_isBootstrapping) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
 
     if (!SupabaseService.isConfigured) {
       return const AuthPage(
