@@ -25,6 +25,7 @@ import '../../../ledger/presentation/widgets/home_tab.dart';
 import '../../../ledger/presentation/widgets/summary_tab.dart';
 import '../../../ledger/presentation/widgets/add_transaction_tab.dart';
 import '../../../ledger/presentation/widgets/sources_tab.dart';
+import '../../../ledger/presentation/widgets/transactions_page.dart';
 import '../../../sms/presentation/widgets/detected_messages_sheet.dart';
 
 class PhaseOneHomePage extends ConsumerStatefulWidget {
@@ -59,6 +60,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   DateTime? _smsTransactionCutoffAt;
   DateTime _ledgerUpdatedAt =
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+  final Map<String, double> _monthlyTargets = {};
   Future<void> _persistQueue = Future.value();
   Timer? _smsPollTimer;
   Timer? _cloudSyncRetryTimer;
@@ -204,7 +206,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         activities: _activities,
         balanceSuggestions: _balanceSuggestions,
         onViewSources: () => setState(() => _selectedIndex = 3),
-        onViewActivities: () => setState(() => _selectedIndex = 1),
+        onViewActivities: () => _navigateToTransactionsPage(_activities),
         onAddSource: _showAddSourceSheet,
         onSetBalance: _setSourceBalance,
         onUseSuggestedBalance: _useBalanceSuggestion,
@@ -214,6 +216,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       SummaryTab(
         sources: _sources.where((source) => !source.archived).toList(),
         activities: _activities,
+        monthlyTargets: _monthlyTargets,
+        onSaveMonthlyTarget: _saveMonthlyTarget,
+        onViewActivities: () => _navigateToTransactionsPage(_activities),
       ),
       AddTransactionTab(
         sources: _sources.where((source) => !source.archived).toList(),
@@ -1119,10 +1124,34 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     await _showCloudSyncWarningIfNeeded();
   }
 
+  Future<void> _saveMonthlyTarget(String monthKey, double amount) async {
+    if (amount <= 0) return;
+    setState(() {
+      _touchLedger();
+      _monthlyTargets[monthKey] = amount;
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+  }
+
+  void _navigateToTransactionsPage(List<ActivityItem> activities) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => TransactionsPage(
+          activities: activities,
+          sources: _sources,
+        ),
+      ),
+    );
+  }
+
   Map<String, dynamic> _ledgerJson() {
     return {
       'sources': _sources.map((source) => source.toJson()).toList(),
       'activities': _activities.map((activity) => activity.toJson()).toList(),
+      'monthlyTargets': _monthlyTargets.map(
+        (key, value) => MapEntry(key, value),
+      ),
       'smsTransactionCutoffAt': _smsTransactionCutoffAt?.toIso8601String(),
       'updatedAt': _ledgerUpdatedAt.toIso8601String(),
     };
@@ -1145,6 +1174,12 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     _smsTransactionCutoffAt =
         DateTime.tryParse('${json['smsTransactionCutoffAt']}');
     _ledgerUpdatedAt = documentUpdatedAt;
+    final monthlyTargets = (json['monthlyTargets'] is Map)
+        ? (json['monthlyTargets'] as Map).map<String, double>(
+            (key, value) =>
+                MapEntry('$key', (value as num?)?.toDouble() ?? 0),
+          )
+        : const <String, double>{};
 
     var removedDuplicates = false;
     if (sources != null && sources.isNotEmpty) {
@@ -1176,6 +1211,10 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
         ..clear()
         ..addAll(activities);
     }
+    _monthlyTargets
+      ..clear()
+      ..addAll(monthlyTargets
+        ..removeWhere((key, value) => key.trim().isEmpty || value <= 0));
     return removedDuplicates;
   }
 }

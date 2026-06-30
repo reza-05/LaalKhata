@@ -213,6 +213,7 @@ class LedgerDatabase extends _$LedgerDatabase {
             type: activity.activityType,
           ),
       ],
+      monthlyTargets: const {},
       smsTransactionCutoffAt: state.smsTransactionCutoffAt,
       updatedAt: state.updatedAt,
     );

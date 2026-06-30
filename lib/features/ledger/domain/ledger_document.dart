@@ -2,12 +2,14 @@ class LedgerDocument {
   const LedgerDocument({
     required this.sources,
     required this.activities,
+    required this.monthlyTargets,
     required this.smsTransactionCutoffAt,
     required this.updatedAt,
   });
 
   final List<LedgerSourceRecord> sources;
   final List<LedgerActivityRecord> activities;
+  final Map<String, double> monthlyTargets;
   final DateTime? smsTransactionCutoffAt;
   final DateTime updatedAt;
 
@@ -19,6 +21,7 @@ class LedgerDocument {
     return LedgerDocument(
       sources: sources,
       activities: activities,
+      monthlyTargets: _mapMonthlyTargets(json['monthlyTargets']),
       smsTransactionCutoffAt:
           DateTime.tryParse('${json['smsTransactionCutoffAt']}'),
       updatedAt: DateTime.tryParse('${json['updatedAt']}')?.toUtc() ??
@@ -30,6 +33,9 @@ class LedgerDocument {
     return {
       'sources': sources.map((source) => source.toJson()).toList(),
       'activities': activities.map((activity) => activity.toJson()).toList(),
+      'monthlyTargets': monthlyTargets.map(
+        (key, value) => MapEntry(key, value),
+      ),
       'smsTransactionCutoffAt': smsTransactionCutoffAt?.toIso8601String(),
       'updatedAt': updatedAt.toUtc().toIso8601String(),
     };
@@ -50,6 +56,13 @@ class LedgerDocument {
         .map(convert)
         .whereType<T>()
         .toList();
+  }
+
+  static Map<String, double> _mapMonthlyTargets(Object? value) {
+    if (value is! Map) return const {};
+    return value.map<String, double>((key, target) {
+      return MapEntry('$key', (target as num?)?.toDouble() ?? 0);
+    })..removeWhere((key, target) => key.trim().isEmpty || target <= 0);
   }
 }
 

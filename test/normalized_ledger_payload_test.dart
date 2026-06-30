@@ -37,6 +37,7 @@ void main() {
             type: 'expense',
           ),
       ],
+      monthlyTargets: const {'2026-06': 12000},
       smsTransactionCutoffAt: occurredAt,
       updatedAt: occurredAt,
     );
@@ -51,6 +52,7 @@ void main() {
     expect(sources[1], containsPair('sortPosition', 1));
     expect(activities[0], containsPair('sortPosition', 0));
     expect(activities[1], containsPair('sortPosition', 1));
+    expect(payload['monthlyTargets'], containsPair('2026-06', 12000));
     expect(
       (activities[0] as Map<String, dynamic>)['activityKey'],
       isNot((activities[1] as Map<String, dynamic>)['activityKey']),

@@ -226,3 +226,25 @@ class TransferRequest {
   final MoneySource to;
   final double amount;
 }
+
+String formatActivityDate(DateTime occurredAt) {
+  final localTime = occurredAt.toLocal();
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final yesterday = today.subtract(const Duration(days: 1));
+  final dateOnly = DateTime(localTime.year, localTime.month, localTime.day);
+
+  final hourStr = localTime.hour.toString().padLeft(2, '0');
+  final minuteStr = localTime.minute.toString().padLeft(2, '0');
+  final timeStr = '$hourStr:$minuteStr';
+
+  if (dateOnly == today) {
+    return 'Today, $timeStr';
+  } else if (dateOnly == yesterday) {
+    return 'Yesterday, $timeStr';
+  } else {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final monthStr = months[localTime.month - 1];
+    return '${localTime.day} $monthStr ${localTime.year}, $timeStr';
+  }
+}

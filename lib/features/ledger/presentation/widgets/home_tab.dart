@@ -617,7 +617,7 @@ class RecentActivityCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '${activity.source} • ${activity.time}',
+                          '${activity.source} • ${formatActivityDate(activity.occurredAt)}',
                           style:
                               Theme.of(context).textTheme.bodySmall?.copyWith(
                                     color: AppColors.mutedInk,

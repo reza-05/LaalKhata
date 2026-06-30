@@ -839,6 +839,10 @@ class DetectedBalancePrompt extends StatelessWidget {
               ),
               OutlinedButton(
                 onPressed: onEdit,
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 36),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                ),
                 child: const Text('Edit'),
               ),
               TextButton(

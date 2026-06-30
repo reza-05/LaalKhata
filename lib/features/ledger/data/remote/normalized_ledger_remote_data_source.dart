@@ -90,6 +90,9 @@ class NormalizedLedgerPayloadBuilder {
       'updatedAt': document.updatedAt.toUtc().toIso8601String(),
       'smsTransactionCutoffAt':
           document.smsTransactionCutoffAt?.toUtc().toIso8601String(),
+      'monthlyTargets': document.monthlyTargets.map(
+        (key, value) => MapEntry(key, value),
+      ),
       'sources': [
         for (var index = 0; index < document.sources.length; index++)
           {
