@@ -33,7 +33,6 @@ class SummaryTab extends StatefulWidget {
 class _SummaryTabState extends State<SummaryTab> {
   SummaryFilter _selectedFilter = SummaryFilter.thisMonth;
   DateTimeRange? _customRange;
-  bool _targetBannerDismissed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -48,13 +47,17 @@ class _SummaryTabState extends State<SummaryTab> {
         expenseActivities.fold(0.0, (sum, item) => sum + item.amount.abs());
     final summaryIncome =
         incomeActivities.fold(0.0, (sum, item) => sum + item.amount.abs());
+    final summaryNet = summaryIncome - summaryExpense;
     final targetMonth = _targetMonthForRange(range);
     final targetMonthKey = _monthKey(targetMonth);
     final targetAmount = widget.monthlyTargets[targetMonthKey];
     final targetExpense = _strictMonthlyExpense(targetMonth);
-    final targetProgress =
-        targetAmount == null || targetAmount <= 0 ? 0.0 : targetExpense / targetAmount;
-    final recentActivities = filteredActivities.take(7).toList();
+    final targetProgress = targetAmount == null || targetAmount <= 0
+        ? 0.0
+        : targetExpense / targetAmount;
+    final categoryItems = _categoryBreakdown(expenseActivities);
+    final sourceItems = _sourceBreakdown(expenseActivities);
+    final recentActivities = filteredActivities.take(6).toList();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 120),
@@ -68,79 +71,72 @@ class _SummaryTabState extends State<SummaryTab> {
           ),
         ),
         const SizedBox(height: 18),
-        _MetricGrid(
+        _MonthlyTargetHeroCard(
+          monthLabel: _monthLabel(targetMonth),
+          targetAmount: targetAmount,
+          spent: targetExpense,
+          progress: targetProgress,
+          onSetTarget: () => _showTargetDialog(targetMonthKey, targetAmount),
+        ),
+        const SizedBox(height: 18),
+        _SummaryStatGrid(
           items: [
-            _MetricCardData(
+            _SummaryStatData(
               title: 'Expense',
-              value: formatMoney(summaryExpense),
-              tone: AppColors.danger,
-              subtitle: 'Spent',
+              subtitle: 'Total spent',
+              value: summaryExpense,
+              color: AppColors.danger,
+              valueColor: AppColors.ink,
               icon: Icons.south_west_rounded,
             ),
-            _MetricCardData(
+            _SummaryStatData(
               title: 'Income',
-              value: formatMoney(summaryIncome),
-              tone: AppColors.positive,
-              subtitle: 'Received',
+              subtitle: 'Total received',
+              value: summaryIncome,
+              color: AppColors.positive,
+              valueColor: AppColors.ink,
               icon: Icons.north_east_rounded,
             ),
-            _MetricCardData(
+            _SummaryStatData(
               title: 'Net',
-              value: formatMoney(summaryIncome - summaryExpense),
-              tone: summaryIncome - summaryExpense >= 0
-                  ? AppColors.positive
-                  : AppColors.danger,
-              subtitle: 'Income - Expense',
+              subtitle: summaryNet >= 0 ? 'Healthy balance' : 'Negative flow',
+              value: summaryNet,
+              color: summaryNet >= 0 ? AppColors.positive : AppColors.danger,
+              valueColor: AppColors.ink,
               icon: Icons.account_balance_wallet_rounded,
             ),
-            _MetricCardData(
+            _SummaryStatData(
               title: 'Target',
-              value: targetAmount == null
-                  ? 'Not Set'
-                  : '${(targetProgress * 100).clamp(0, 999).round()}%',
-              tone: _targetTone(targetProgress),
               subtitle: targetAmount == null
-                  ? 'Set this month\'s cap'
+                  ? 'No target set'
                   : _targetMessage(targetProgress),
+              value: targetAmount == null
+                  ? null
+                  : (targetProgress * 100).clamp(0, 999).toDouble(),
+              color: _targetTone(targetProgress),
+              valueColor: AppColors.ink,
               icon: Icons.track_changes_rounded,
+              suffix: targetAmount == null ? null : '%',
+              labelValue: targetAmount == null ? 'Set target' : null,
             ),
           ],
         ),
-        if (targetAmount == null) ...[
-          if (!_targetBannerDismissed) ...[
-            const SizedBox(height: 16),
-            _NoTargetBanner(
-              onSetTarget: () => _showTargetDialog(targetMonthKey, targetAmount),
-              onDismiss: () => setState(() => _targetBannerDismissed = true),
-            ),
-          ],
-        ] else ...[
-          const SizedBox(height: 16),
-          _CompactTargetProgressBanner(
-            monthLabel: _monthLabel(targetMonth),
-            targetAmount: targetAmount,
-            spent: targetExpense,
-            progress: targetProgress,
-            onEditTarget: () => _showTargetDialog(targetMonthKey, targetAmount),
-          ),
-        ],
         const SizedBox(height: 18),
         LayoutBuilder(
           builder: (context, constraints) {
             final stacked = constraints.maxWidth < 760;
-            final chartCards = [
-              _ChartCard(
+            final analyticsCards = [
+              _PremiumSectionCard(
                 title: 'Category Distribution',
-                subtitle: 'See where your spending is going.',
-                child: _CategoryDonutSection(
-                  items: _categoryBreakdown(expenseActivities),
-                ),
+                subtitle: 'Understand where your spending is going.',
+                child: _CategoryDistributionSection(items: categoryItems),
               ),
-              _ChartCard(
+              _PremiumSectionCard(
                 title: 'Daily Spending',
-                subtitle: 'Spot recent changes quickly.',
+                subtitle: 'Track recent movement with flexible views.',
                 child: _DailySpendingSection(
-                  bars: _dailyBars(range, filteredActivities),
+                  activities: widget.activities,
+                  referenceDate: now,
                 ),
               ),
             ];
@@ -148,9 +144,9 @@ class _SummaryTabState extends State<SummaryTab> {
             if (stacked) {
               return Column(
                 children: [
-                  chartCards[0],
+                  analyticsCards[0],
                   const SizedBox(height: 16),
-                  chartCards[1],
+                  analyticsCards[1],
                 ],
               );
             }
@@ -158,9 +154,9 @@ class _SummaryTabState extends State<SummaryTab> {
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: chartCards[0]),
+                Expanded(child: analyticsCards[0]),
                 const SizedBox(width: 16),
-                Expanded(child: chartCards[1]),
+                Expanded(child: analyticsCards[1]),
               ],
             );
           },
@@ -168,49 +164,20 @@ class _SummaryTabState extends State<SummaryTab> {
         const SizedBox(height: 18),
         LayoutBuilder(
           builder: (context, constraints) {
-            final categoryItems = _categoryBreakdown(expenseActivities);
-            final sourceItems = _sourceBreakdown(expenseActivities);
             final stacked = constraints.maxWidth < 760;
             final cards = [
-              _BreakdownInsightCard(
+              _PremiumSectionCard(
                 title: 'Category Breakdown',
-                subtitle: 'Top expense categories in this range.',
-                emptyText: 'No expense categories to show yet.',
-                children: categoryItems
-                    .map(
-                      (item) => _BreakdownRow(
-                        label: item.label,
-                        value: item.value,
-                        share: item.share,
-                        color: item.color,
-                        icon: _categoryMeta(item.label).icon,
-                      ),
-                    )
-                    .toList(),
+                subtitle: 'Top categories by total spending.',
+                child: _CategoryBreakdownSection(items: categoryItems),
               ),
-              _BreakdownInsightCard(
+              _PremiumSectionCard(
                 title: 'Source Breakdown',
-                subtitle: 'Which sources handled most spending.',
-                emptyText: 'Source distribution will appear after expenses.',
-                children: sourceItems
-                    .map(
-                      (item) => _SourceBreakdownRow(
-                        item: item,
-                        source: widget.sources.firstWhere(
-                          (source) =>
-                              sourceIdentityKey(source.name) ==
-                              sourceIdentityKey(item.label),
-                          orElse: () => MoneySource(
-                            name: item.label,
-                            type: SourceType.other,
-                            balance: null,
-                            color: AppColors.primary,
-                            icon: Icons.account_balance_wallet_outlined,
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
+                subtitle: 'Your most-used spending sources.',
+                child: _SourceBreakdownSection(
+                  items: sourceItems,
+                  sources: widget.sources,
+                ),
               ),
             ];
 
@@ -316,8 +283,6 @@ class _SummaryTabState extends State<SummaryTab> {
     );
   }
 
-
-
   DateTimeRange _activeRange(DateTime now) {
     switch (_selectedFilter) {
       case SummaryFilter.today:
@@ -383,7 +348,7 @@ class _SummaryTabState extends State<SummaryTab> {
       );
     }
     final total = totals.values.fold(0.0, (sum, value) => sum + value);
-    final entries = totals.entries
+    return totals.entries
         .map(
           (entry) => _BreakdownEntry(
             label: entry.key,
@@ -394,7 +359,6 @@ class _SummaryTabState extends State<SummaryTab> {
         )
         .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    return entries;
   }
 
   List<_BreakdownEntry> _sourceBreakdown(List<ActivityItem> activities) {
@@ -407,7 +371,7 @@ class _SummaryTabState extends State<SummaryTab> {
       );
     }
     final total = totals.values.fold(0.0, (sum, value) => sum + value);
-    final entries = totals.entries
+    return totals.entries
         .map(
           (entry) => _BreakdownEntry(
             label: entry.key,
@@ -418,44 +382,6 @@ class _SummaryTabState extends State<SummaryTab> {
         )
         .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    return entries.take(5).toList();
-  }
-
-  List<_DailySpendBar> _dailyBars(
-    DateTimeRange range,
-    List<ActivityItem> filteredActivities,
-  ) {
-    final totals = <DateTime, double>{};
-    for (final activity in filteredActivities.where(_countsForDashboardExpense)) {
-      final day = DateTime(
-        activity.occurredAt.year,
-        activity.occurredAt.month,
-        activity.occurredAt.day,
-      );
-      totals.update(
-        day,
-        (value) => value + activity.amount.abs(),
-        ifAbsent: () => activity.amount.abs(),
-      );
-    }
-
-    final dayCount = math.min(
-      7,
-      range.end.difference(range.start).inDays.abs() + 1,
-    );
-    final startDay = DateTime(
-      range.end.year,
-      range.end.month,
-      range.end.day,
-    ).subtract(Duration(days: dayCount - 1));
-
-    return List.generate(dayCount, (index) {
-      final day = startDay.add(Duration(days: index));
-      return _DailySpendBar(
-        label: _weekdayLabel(day),
-        amount: totals[day] ?? 0,
-      );
-    });
   }
 
   String _filterSubtitle(DateTimeRange range) {
@@ -478,11 +404,6 @@ class _SummaryTabState extends State<SummaryTab> {
       'Dec',
     ];
     return '${value.day} ${months[value.month - 1]}';
-  }
-
-  String _weekdayLabel(DateTime value) {
-    const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-    return days[value.weekday - 1];
   }
 
   String _monthKey(DateTime value) =>
@@ -538,112 +459,560 @@ enum SummaryFilter {
   final String label;
 }
 
-class _MetricCardData {
-  const _MetricCardData({
-    required this.title,
-    required this.value,
-    required this.subtitle,
-    required this.icon,
-    required this.tone,
-  });
+enum _SummaryChartMode {
+  weekly('Weekly'),
+  monthly('Monthly'),
+  compare('This Month vs Previous');
 
-  final String title;
-  final String value;
-  final String subtitle;
-  final IconData icon;
-  final Color tone;
+  const _SummaryChartMode(this.label);
+
+  final String label;
 }
 
-class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({
-    required this.items,
+class _MonthlyTargetHeroCard extends StatelessWidget {
+  const _MonthlyTargetHeroCard({
+    required this.monthLabel,
+    required this.targetAmount,
+    required this.spent,
+    required this.progress,
+    required this.onSetTarget,
   });
 
-  final List<_MetricCardData> items;
+  final String monthLabel;
+  final double? targetAmount;
+  final double spent;
+  final double progress;
+  final VoidCallback onSetTarget;
 
   @override
   Widget build(BuildContext context) {
-    if (items.length < 4) return const SizedBox.shrink();
+    final tone = _targetTone(progress);
+    final remaining =
+        targetAmount == null ? 0.0 : math.max(0.0, targetAmount! - spent);
+    final status = _targetMessage(progress);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.line),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.subtleShadow.withValues(alpha: 0.045),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 16,
+            bottom: 16,
+            child: Container(
+              width: 4,
+              decoration: BoxDecoration(
+                color: tone,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 16, 16),
+            child: targetAmount == null
+                ? _TargetUnsetContent(
+                    monthLabel: monthLabel,
+                    onSetTarget: onSetTarget,
+                  )
+                : _TargetConfiguredContent(
+                    monthLabel: monthLabel,
+                    targetAmount: targetAmount!,
+                    spent: spent,
+                    remaining: remaining,
+                    progress: progress,
+                    tone: tone,
+                    status: status,
+                    onEditTarget: onSetTarget,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TargetUnsetContent extends StatelessWidget {
+  const _TargetUnsetContent({
+    required this.monthLabel,
+    required this.onSetTarget,
+  });
+
+  final String monthLabel;
+  final VoidCallback onSetTarget;
+
+  @override
+  Widget build(BuildContext context) {
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _MetricCard(item: items[0])),
-              const SizedBox(width: 12),
-              Expanded(child: _MetricCard(item: items[1])),
-            ],
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Monthly Target',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    monthLabel,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.mutedInk,
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton.icon(
+              onPressed: onSetTarget,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Set Target'),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: _MetricCard(item: items[2])),
-              const SizedBox(width: 12),
-              Expanded(child: _MetricCard(item: items[3])),
-            ],
-          ),
+        const SizedBox(height: 18),
+        Text(
+          'No target set yet',
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                color: AppColors.ink,
+                fontWeight: FontWeight.w900,
+              ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Set a monthly spending limit to see progress, remaining budget, and early warnings.',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.mutedInk,
+                height: 1.4,
+              ),
         ),
       ],
     );
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.item,
+class _TargetConfiguredContent extends StatelessWidget {
+  const _TargetConfiguredContent({
+    required this.monthLabel,
+    required this.targetAmount,
+    required this.spent,
+    required this.remaining,
+    required this.progress,
+    required this.tone,
+    required this.status,
+    required this.onEditTarget,
   });
 
-  final _MetricCardData item;
+  final String monthLabel;
+  final double targetAmount;
+  final double spent;
+  final double remaining;
+  final double progress;
+  final Color tone;
+  final String status;
+  final VoidCallback onEditTarget;
 
   @override
   Widget build(BuildContext context) {
+    final percentText = '${(progress * 100).clamp(0, 999).round()}%';
+    final headlineStyle = Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w900,
+          color: AppColors.ink,
+          height: 1.05,
+          fontSize: 19,
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Monthly Target',
+                    style: headlineStyle,
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    monthLabel,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppColors.mutedInk,
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                InkWell(
+                  borderRadius: BorderRadius.circular(999),
+                  onTap: onEditTarget,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: tone.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.edit_rounded, size: 13, color: tone),
+                        const SizedBox(width: 5),
+                        Text(
+                          'Edit',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: tone,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: tone.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    percentText,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: tone,
+                          fontWeight: FontWeight.w900,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 650),
+          curve: Curves.easeOutCubic,
+          tween: Tween<double>(begin: 0, end: spent),
+          builder: (context, value, child) {
+            return Text(
+              formatMoney(value),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.ink,
+                    letterSpacing: 0,
+                    fontSize: 22,
+                    height: 1.0,
+                  ),
+            );
+          },
+        ),
+        const SizedBox(height: 1),
+        Text(
+          'Target: ${formatMoney(targetAmount)}',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.mutedInk,
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        const SizedBox(height: 10),
+        TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 800),
+          curve: Curves.easeOutCubic,
+          tween: Tween<double>(
+            begin: 0,
+            end: progress.clamp(0.0, progress > 1 ? progress : 1.0),
+          ),
+          builder: (context, value, child) {
+            final displayProgress = value.clamp(0.0, 1.0);
+            return Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: displayProgress,
+                    minHeight: 6,
+                    backgroundColor: AppColors.altSurface,
+                    valueColor: AlwaysStoppedAnimation<Color>(tone),
+                  ),
+                ),
+                if (progress > 1)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        'Over target by ${formatMoney(spent - targetAmount)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.primaryDark,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: AppColors.altSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.line),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _TargetMiniStat(
+                  label: 'Used',
+                  value: formatMoney(spent),
+                  tone: AppColors.ink,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 38,
+                color: AppColors.line,
+              ),
+              Expanded(
+                child: _TargetMiniStat(
+                  label: 'Remaining',
+                  value: formatMoney(remaining),
+                  tone: tone,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Icon(
+              _statusIcon(progress),
+              size: 16,
+              color: tone,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              status,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: tone,
+                    fontWeight: FontWeight.w800,
+                  ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  IconData _statusIcon(double progress) {
+    if (progress > 1) return Icons.cancel_outlined;
+    if (progress >= 0.9) return Icons.error_outline_rounded;
+    if (progress >= 0.7) return Icons.warning_amber_rounded;
+    return Icons.check_circle_outline_rounded;
+  }
+}
+
+class _TargetMiniStat extends StatelessWidget {
+  const _TargetMiniStat({
+    required this.label,
+    required this.value,
+    required this.tone,
+  });
+
+  final String label;
+  final String value;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.mutedInk,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: tone,
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryStatData {
+  const _SummaryStatData({
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.icon,
+    this.valueColor,
+    this.value,
+    this.suffix,
+    this.labelValue,
+  });
+
+  final String title;
+  final String subtitle;
+  final double? value;
+  final String? suffix;
+  final String? labelValue;
+  final Color color;
+  final Color? valueColor;
+  final IconData icon;
+}
+
+class _SummaryStatGrid extends StatelessWidget {
+  const _SummaryStatGrid({
+    required this.items,
+  });
+
+  final List<_SummaryStatData> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 1.42,
+      ),
+      itemCount: items.length,
+      itemBuilder: (context, index) => _SummaryStatCard(item: items[index]),
+    );
+  }
+}
+
+class _SummaryStatCard extends StatelessWidget {
+  const _SummaryStatCard({
+    required this.item,
+  });
+
+  final _SummaryStatData item;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayValueColor = item.valueColor ?? AppColors.ink;
+
     return Card(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: item.tone.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(10),
+            Row(
+              children: [
+                Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: item.color.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(item.icon, size: 17, color: item.color),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppColors.mutedInk,
+                          fontWeight: FontWeight.w800,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (item.labelValue != null)
+              Text(
+                item.labelValue!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: AppColors.ink,
+                      fontWeight: FontWeight.w900,
+                    ),
+              )
+            else
+              TweenAnimationBuilder<double>(
+                duration: const Duration(milliseconds: 650),
+                curve: Curves.easeOutCubic,
+                tween: Tween<double>(begin: 0, end: item.value ?? 0),
+                builder: (context, value, child) {
+                  final text = item.suffix == '%'
+                      ? '${value.round()}%'
+                      : formatMoney(value);
+                  return Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: displayValueColor,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 20,
+                          height: 1.0,
+                        ),
+                  );
+                },
               ),
-              child: Icon(item.icon, color: item.tone, size: 20),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              item.title,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.mutedInk,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              item.value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    color: AppColors.ink,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 22,
-                  ),
-            ),
-            const SizedBox(height: 6),
+            const Spacer(),
+            const SizedBox(height: 4),
             Text(
               item.subtitle,
               maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              overflow: TextOverflow.fade,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: AppColors.mutedInk,
-                    fontSize: 13,
                     height: 1.2,
                   ),
             ),
@@ -654,308 +1023,8 @@ class _MetricCard extends StatelessWidget {
   }
 }
 
-class _NoTargetBanner extends StatelessWidget {
-  const _NoTargetBanner({
-    required this.onSetTarget,
-    required this.onDismiss,
-  });
-
-  final VoidCallback onSetTarget;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.expense.withValues(alpha: 0.06),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.expense.withValues(alpha: 0.16)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.info_outline_rounded,
-            color: AppColors.expense,
-            size: 20,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Monthly target is not set',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.ink,
-                      ),
-                ),
-                Text(
-                  'Set a spending cap to track your progress.',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppColors.mutedInk,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          OutlinedButton(
-            onPressed: onSetTarget,
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size(0, 32),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              side: const BorderSide(color: AppColors.expense),
-              foregroundColor: AppColors.expense,
-            ),
-            child: const Text('Set Target', style: TextStyle(fontSize: 12)),
-          ),
-          const SizedBox(width: 6),
-          IconButton(
-            icon: const Icon(Icons.close_rounded, size: 18),
-            color: AppColors.mutedInk,
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(),
-            onPressed: onDismiss,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CompactTargetProgressBanner extends StatelessWidget {
-  const _CompactTargetProgressBanner({
-    required this.monthLabel,
-    required this.targetAmount,
-    required this.spent,
-    required this.progress,
-    required this.onEditTarget,
-  });
-
-  final String monthLabel;
-  final double targetAmount;
-  final double spent;
-  final double progress;
-  final VoidCallback onEditTarget;
-
-  @override
-  Widget build(BuildContext context) {
-    Color statusColor;
-    String statusLabel = '';
-    IconData statusIcon;
-
-    if (progress >= 1.0) {
-      statusColor = AppColors.danger; // Red only when reaching/exceeding 100%
-      statusLabel = 'Target Exceeded';
-      statusIcon = Icons.cancel_outlined;
-    } else if (progress >= 0.7) {
-      statusColor = AppColors.warning; // Amber for warning threshold
-      statusLabel = 'Approaching Limit';
-      statusIcon = Icons.warning_amber_rounded;
-    } else {
-      statusColor = AppColors.positive; // Green when within target
-      statusLabel = 'Within Target';
-      statusIcon = Icons.check_circle_outline_rounded;
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.line), // Uniform outer border
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(18),
-        child: Stack(
-          children: [
-            // Premium colored left accent strip (completely robust using Positioned in Stack)
-            Positioned(
-              left: 0,
-              top: 0,
-              bottom: 0,
-              child: Container(
-                width: 5,
-                color: statusColor,
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(21, 16, 16, 16), // Left padding is 21 to clear the 5px accent strip
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Monthly Target ($monthLabel)',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.mutedInk,
-                              ),
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: onEditTarget,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'Edit',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: AppColors.primary,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                            ),
-                            const SizedBox(width: 4),
-                            const Icon(
-                              Icons.edit_rounded,
-                              size: 12,
-                              color: AppColors.primary,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 14),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      // Used amount info
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Used',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.mutedInk,
-                                    fontSize: 11,
-                                  ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              formatMoney(spent),
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: AppColors.ink,
-                                    fontSize: 18,
-                                  ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              'of ${formatMoney(targetAmount)}',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: AppColors.mutedInk,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Remaining amount info
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Remaining',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: AppColors.mutedInk,
-                                    fontSize: 11,
-                                  ),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              formatMoney(math.max(0.0, targetAmount - spent)),
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: AppColors.ink,
-                                    fontSize: 18,
-                                  ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              spent > targetAmount ? 'Exceeded Limit' : 'Under target cap',
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: AppColors.mutedInk,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Percentage and Status info
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            '${(progress * 100).clamp(0, 999).round()}%',
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.w900,
-                                  color: statusColor,
-                                  fontSize: 22,
-                                ),
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(statusIcon, color: statusColor, size: 12),
-                              const SizedBox(width: 4),
-                              Text(
-                                statusLabel,
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: statusColor,
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 11,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  TweenAnimationBuilder<double>(
-                    duration: const Duration(milliseconds: 600),
-                    curve: Curves.easeOutCubic,
-                    tween: Tween<double>(begin: 0.0, end: progress.clamp(0.0, 1.0)),
-                    builder: (context, animValue, child) {
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(999),
-                        child: LinearProgressIndicator(
-                          minHeight: 8, // 8px thick progress bar
-                          value: animValue,
-                          color: statusColor,
-                          backgroundColor: AppColors.altSurface,
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ChartCard extends StatelessWidget {
-  const _ChartCard({
+class _PremiumSectionCard extends StatelessWidget {
+  const _PremiumSectionCard({
     required this.title,
     required this.subtitle,
     required this.child,
@@ -985,6 +1054,7 @@ class _ChartCard extends StatelessWidget {
               subtitle,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: AppColors.mutedInk,
+                    height: 1.35,
                   ),
             ),
             const SizedBox(height: 18),
@@ -996,8 +1066,8 @@ class _ChartCard extends StatelessWidget {
   }
 }
 
-class _CategoryDonutSection extends StatelessWidget {
-  const _CategoryDonutSection({
+class _CategoryDistributionSection extends StatelessWidget {
+  const _CategoryDistributionSection({
     required this.items,
   });
 
@@ -1008,7 +1078,70 @@ class _CategoryDonutSection extends StatelessWidget {
     if (items.isEmpty) {
       return const _EmptyChartState(
         icon: Icons.pie_chart_outline_rounded,
-        message: 'No category data available yet.',
+        message:
+            'No spending recorded yet.\nStart adding transactions to unlock insights.',
+      );
+    }
+
+    if (items.length == 1) {
+      final item = items.first;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: item.color.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  _categoryMeta(item.label).icon,
+                  color: item.color,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.label,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
+                          ),
+                    ),
+                    Text(
+                      '100% of spending',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.mutedInk,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                formatMoney(item.value),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: 1,
+              minHeight: 12,
+              color: item.color,
+              backgroundColor: AppColors.altSurface,
+            ),
+          ),
+        ],
       );
     }
 
@@ -1016,30 +1149,49 @@ class _CategoryDonutSection extends StatelessWidget {
     return Row(
       children: [
         SizedBox(
-          width: 136,
-          height: 136,
+          width: 148,
+          height: 148,
           child: CustomPaint(
             painter: _DonutChartPainter(items: topItems),
             child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Top',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.mutedInk,
-                          fontWeight: FontWeight.w700,
-                        ),
-                  ),
-                  Text(
-                    topItems.first.label,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: AppColors.ink,
-                          fontWeight: FontWeight.w900,
-                        ),
-                  ),
-                ],
+              child: Container(
+                width: 82,
+                height: 82,
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.subtleShadow.withValues(alpha: 0.05),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Top',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.mutedInk,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      topItems.first.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppColors.ink,
+                            fontWeight: FontWeight.w900,
+                          ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -1050,7 +1202,7 @@ class _CategoryDonutSection extends StatelessWidget {
             children: [
               for (final item in topItems)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.only(bottom: 14),
                   child: Row(
                     children: [
                       Container(
@@ -1065,12 +1217,15 @@ class _CategoryDonutSection extends StatelessWidget {
                       Expanded(
                         child: Text(
                           item.label,
-                          style: Theme.of(context)
-                              .textTheme
-                              .bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                  ),
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         '${(item.share * 100).round()}%',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -1089,72 +1244,334 @@ class _CategoryDonutSection extends StatelessWidget {
   }
 }
 
-class _DailySpendingSection extends StatelessWidget {
+class _DailySpendingSection extends StatefulWidget {
   const _DailySpendingSection({
-    required this.bars,
+    required this.activities,
+    required this.referenceDate,
   });
 
-  final List<_DailySpendBar> bars;
+  final List<ActivityItem> activities;
+  final DateTime referenceDate;
+
+  @override
+  State<_DailySpendingSection> createState() => _DailySpendingSectionState();
+}
+
+class _DailySpendingSectionState extends State<_DailySpendingSection> {
+  _SummaryChartMode _mode = _SummaryChartMode.weekly;
+  int _selectedIndex = -1;
+
+  @override
+  void didUpdateWidget(covariant _DailySpendingSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activities != widget.activities) {
+      _selectedIndex = -1;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (bars.every((bar) => bar.amount <= 0)) {
-      return const _EmptyChartState(
-        icon: Icons.insights_outlined,
-        message: 'Daily spending will appear after expenses are added.',
+    final model = _buildChartModel();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final mode in _SummaryChartMode.values)
+              _RangeChip(
+                label: mode.label,
+                selected: _mode == mode,
+                onTap: () {
+                  setState(() {
+                    _mode = mode;
+                    _selectedIndex = -1;
+                  });
+                },
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        if (model.message != null)
+          _EmptyChartState(
+            icon: Icons.bar_chart_rounded,
+            message: model.message!,
+          )
+        else
+          _ChartBarsView(
+            title: model.title,
+            subtitle: model.subtitle,
+            bars: model.bars,
+            selectedIndex: _selectedIndex,
+            onSelect: (index) => setState(() => _selectedIndex = index),
+          ),
+      ],
+    );
+  }
+
+  _SpendingChartModel _buildChartModel() {
+    final expenses = widget.activities
+        .where(_countsForDashboardExpense)
+        .toList()
+      ..sort((a, b) => a.occurredAt.compareTo(b.occurredAt));
+
+    switch (_mode) {
+      case _SummaryChartMode.weekly:
+        final bars = _weeklyBars(expenses);
+        if (bars.every((bar) => bar.amount <= 0)) {
+          return const _SpendingChartModel(
+            title: 'Weekly spending',
+            subtitle: 'Last 7 days',
+            message: 'No weekly spending found yet.',
+          );
+        }
+        return _SpendingChartModel(
+          title: 'Weekly spending',
+          subtitle: 'Last 7 days',
+          bars: bars,
+        );
+      case _SummaryChartMode.monthly:
+        final bars = _monthlyBars(expenses);
+        if (bars.every((bar) => bar.amount <= 0)) {
+          return const _SpendingChartModel(
+            title: 'Monthly spending',
+            subtitle: 'Current month by week',
+            message: 'No monthly spending found yet.',
+          );
+        }
+        return _SpendingChartModel(
+          title: 'Monthly spending',
+          subtitle: 'Current month by week',
+          bars: bars,
+        );
+      case _SummaryChartMode.compare:
+        final bars = _comparisonBars(expenses);
+        final previousAmount = bars.first.amount;
+        final currentAmount = bars.last.amount;
+        if (currentAmount <= 0 && previousAmount <= 0) {
+          return const _SpendingChartModel(
+            title: 'This month vs previous month',
+            subtitle: 'Month-to-month comparison',
+            message: 'No comparison data found yet.',
+          );
+        }
+        if (previousAmount <= 0) {
+          return const _SpendingChartModel(
+            title: 'This month vs previous month',
+            subtitle: 'Month-to-month comparison',
+            message: 'Previous month data not found yet.',
+          );
+        }
+        return _SpendingChartModel(
+          title: 'This month vs previous month',
+          subtitle: 'Month-to-month comparison',
+          bars: bars,
+        );
+    }
+  }
+
+  List<_DailySpendBar> _weeklyBars(List<ActivityItem> expenses) {
+    final end = DateTime(
+      widget.referenceDate.year,
+      widget.referenceDate.month,
+      widget.referenceDate.day,
+    );
+    final start = end.subtract(const Duration(days: 6));
+    final totals = <DateTime, double>{};
+
+    for (final activity in expenses) {
+      final day = DateTime(
+        activity.occurredAt.year,
+        activity.occurredAt.month,
+        activity.occurredAt.day,
+      );
+      if (day.isBefore(start) || day.isAfter(end)) continue;
+      totals.update(
+        day,
+        (value) => value + activity.amount.abs(),
+        ifAbsent: () => activity.amount.abs(),
       );
     }
 
+    return List.generate(7, (index) {
+      final day = start.add(Duration(days: index));
+      return _DailySpendBar(
+        date: day,
+        label: _shortDayLabel(day),
+        amount: totals[day] ?? 0,
+      );
+    });
+  }
+
+  List<_DailySpendBar> _monthlyBars(List<ActivityItem> expenses) {
+    final now = widget.referenceDate;
+    final start = DateTime(now.year, now.month, 1);
+    final end = DateTime(now.year, now.month + 1, 0);
+    final totals = <int, double>{};
+
+    for (final activity in expenses) {
+      final time = activity.occurredAt;
+      if (time.isBefore(start) ||
+          time.isAfter(DateTime(end.year, end.month, end.day, 23, 59, 59))) {
+        continue;
+      }
+      final weekIndex = ((time.day - 1) ~/ 7) + 1;
+      totals.update(
+        weekIndex,
+        (value) => value + activity.amount.abs(),
+        ifAbsent: () => activity.amount.abs(),
+      );
+    }
+
+    final totalWeeks = ((end.day - 1) ~/ 7) + 1;
+    return List.generate(totalWeeks, (index) {
+      final week = index + 1;
+      return _DailySpendBar(
+        date: start.add(Duration(days: index * 7)),
+        label: 'W$week',
+        amount: totals[week] ?? 0,
+      );
+    });
+  }
+
+  List<_DailySpendBar> _comparisonBars(List<ActivityItem> expenses) {
+    final now = widget.referenceDate;
+    final currentStart = DateTime(now.year, now.month, 1);
+    final currentEnd = DateTime(now.year, now.month + 1, 0, 23, 59, 59);
+    final previousStart = DateTime(now.year, now.month - 1, 1);
+    final previousEnd = DateTime(now.year, now.month, 0, 23, 59, 59);
+
+    var currentTotal = 0.0;
+    var previousTotal = 0.0;
+
+    for (final activity in expenses) {
+      final time = activity.occurredAt;
+      if (!time.isBefore(currentStart) && !time.isAfter(currentEnd)) {
+        currentTotal += activity.amount.abs();
+      } else if (!time.isBefore(previousStart) && !time.isAfter(previousEnd)) {
+        previousTotal += activity.amount.abs();
+      }
+    }
+
+    return [
+      _DailySpendBar(
+        date: previousStart,
+        label: _monthShort(previousStart),
+        amount: previousTotal,
+      ),
+      _DailySpendBar(
+        date: currentStart,
+        label: _monthShort(currentStart),
+        amount: currentTotal,
+      ),
+    ];
+  }
+
+  String _shortDayLabel(DateTime date) {
+    const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return labels[date.weekday - 1];
+  }
+
+  String _monthShort(DateTime date) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return months[date.month - 1];
+  }
+}
+
+class _ChartBarsView extends StatelessWidget {
+  const _ChartBarsView({
+    required this.title,
+    required this.subtitle,
+    required this.bars,
+    required this.selectedIndex,
+    required this.onSelect,
+  });
+
+  final String title;
+  final String subtitle;
+  final List<_DailySpendBar> bars;
+  final int selectedIndex;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
     final maxValue = bars.fold<double>(
       0,
-      (maxAmount, bar) => math.max(maxAmount, bar.amount),
+      (current, bar) => math.max(current, bar.amount),
     );
-    return SizedBox(
-      height: 180,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          for (final bar in bars)
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
+    final midValue = maxValue / 2;
+    final effectiveSelected =
+        (selectedIndex >= 0 && selectedIndex < bars.length)
+            ? selectedIndex
+            : bars.lastIndexWhere((bar) => bar.amount > 0);
+    final selectedBar =
+        effectiveSelected >= 0 ? bars[effectiveSelected] : bars.last;
+    final activeBars = bars.where((bar) => bar.amount > 0).toList();
+
+    if (activeBars.length <= 1) {
+      final singleBar = activeBars.isEmpty ? bars.last : activeBars.first;
+      return _SingleDaySpendingState(
+        title: title,
+        subtitle: subtitle,
+        bar: singleBar,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.altSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.line),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.bar_chart_rounded,
+                  color: AppColors.primary,
+                  size: 19,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
                 child: Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      bar.amount <= 0 ? '—' : formatMoney(bar.amount),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.mutedInk,
-                            fontWeight: FontWeight.w600,
+                      title,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
                           ),
                     ),
-                    const SizedBox(height: 8),
-                    Container(
-                      height: 112,
-                      alignment: Alignment.bottomCenter,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 320),
-                        curve: Curves.easeOutCubic,
-                        width: 28,
-                        height: maxValue == 0 ? 0 : (bar.amount / maxValue) * 112,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              AppColors.accent,
-                              AppColors.primary,
-                            ],
-                          ),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 2),
                     Text(
-                      bar.label,
+                      '$subtitle • ${selectedBar.label}',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: AppColors.mutedInk,
                             fontWeight: FontWeight.w700,
@@ -1163,71 +1580,326 @@ class _DailySpendingSection extends StatelessWidget {
                   ],
                 ),
               ),
+              Text(
+                formatMoney(selectedBar.amount),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppColors.ink,
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 210,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: 52,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _axisLabel(context, formatMoney(maxValue)),
+                    _axisLabel(context, formatMoney(midValue)),
+                    _axisLabel(context, '৳0'),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < bars.length; i++)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 5),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () => onSelect(i),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                AnimatedOpacity(
+                                  duration: const Duration(milliseconds: 180),
+                                  opacity: effectiveSelected == i ? 1 : 0,
+                                  child: Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: FittedBox(
+                                      child: Text(
+                                        bars[i].amount <= 0
+                                            ? '৳0'
+                                            : formatMoney(bars[i].amount),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: AppColors.ink,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 320),
+                                      curve: Curves.easeOutCubic,
+                                      width: effectiveSelected == i ? 24 : 18,
+                                      height: maxValue == 0
+                                          ? 10
+                                          : math.max(
+                                              10,
+                                              (bars[i].amount / maxValue) * 138,
+                                            ),
+                                      decoration: BoxDecoration(
+                                        color: effectiveSelected == i
+                                            ? AppColors.primary
+                                            : AppColors.primary
+                                                .withValues(alpha: 0.32),
+                                        borderRadius:
+                                            BorderRadius.circular(999),
+                                        boxShadow: effectiveSelected == i
+                                            ? [
+                                                BoxShadow(
+                                                  color: AppColors.primary
+                                                      .withValues(alpha: 0.18),
+                                                  blurRadius: 12,
+                                                  offset: const Offset(0, 8),
+                                                ),
+                                              ]
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Text(
+                                  bars[i].label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: effectiveSelected == i
+                                            ? AppColors.ink
+                                            : AppColors.mutedInk,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _axisLabel(BuildContext context, String text) {
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: AppColors.mutedInk,
+            fontWeight: FontWeight.w700,
+          ),
+    );
+  }
+}
+
+class _SingleDaySpendingState extends StatelessWidget {
+  const _SingleDaySpendingState({
+    required this.title,
+    required this.subtitle,
+    required this.bar,
+  });
+
+  final String title;
+  final String subtitle;
+  final _DailySpendBar bar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.altSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.bar_chart_rounded,
+                  color: AppColors.primary,
+                  size: 19,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w900,
+                          ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$subtitle • ${bar.label}',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: AppColors.mutedInk,
+                            fontWeight: FontWeight.w700,
+                          ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                formatMoney(bar.amount),
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppColors.ink,
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: const LinearProgressIndicator(
+              value: 1,
+              minHeight: 8,
+              color: AppColors.primary,
+              backgroundColor: Colors.white,
             ),
+          ),
         ],
       ),
     );
   }
 }
 
-class _BreakdownInsightCard extends StatelessWidget {
-  const _BreakdownInsightCard({
+class _SpendingChartModel {
+  const _SpendingChartModel({
     required this.title,
     required this.subtitle,
-    required this.emptyText,
-    required this.children,
+    this.bars = const [],
+    this.message,
   });
 
   final String title;
   final String subtitle;
-  final String emptyText;
-  final List<Widget> children;
+  final List<_DailySpendBar> bars;
+  final String? message;
+}
+
+class _CategoryBreakdownSection extends StatelessWidget {
+  const _CategoryBreakdownSection({
+    required this.items,
+  });
+
+  final List<_BreakdownEntry> items;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
+    if (items.isEmpty) {
+      return const _EmptyCardMessage(
+        message: 'No spending recorded yet.',
+      );
+    }
+
+    return Column(
+      children: [
+        for (final item in items.take(6))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _RankedBreakdownRow(
+              label: item.label,
+              value: item.value,
+              share: item.share,
+              color: item.color,
+              icon: _categoryMeta(item.label).icon,
             ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppColors.mutedInk,
-                  ),
-            ),
-            const SizedBox(height: 16),
-            if (children.isEmpty)
-              Text(
-                emptyText,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.mutedInk,
-                    ),
-              )
-            else
-              ...children.expand(
-                (child) => [
-                  child,
-                  if (child != children.last) const SizedBox(height: 14),
-                ],
-              ),
-          ],
-        ),
-      ),
+          ),
+      ],
     );
   }
 }
 
-class _BreakdownRow extends StatelessWidget {
-  const _BreakdownRow({
+class _SourceBreakdownSection extends StatelessWidget {
+  const _SourceBreakdownSection({
+    required this.items,
+    required this.sources,
+  });
+
+  final List<_BreakdownEntry> items;
+  final List<MoneySource> sources;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return const _EmptyCardMessage(
+        message: 'Source usage will appear after expenses are added.',
+      );
+    }
+
+    return Column(
+      children: [
+        for (final item in items.take(6))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _SourceRankedRow(
+              item: item,
+              source: sources.firstWhere(
+                (source) =>
+                    sourceIdentityKey(source.name) ==
+                    sourceIdentityKey(item.label),
+                orElse: () => MoneySource(
+                  name: item.label,
+                  type: SourceType.other,
+                  balance: null,
+                  color: AppColors.primary,
+                  icon: Icons.account_balance_wallet_outlined,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _RankedBreakdownRow extends StatelessWidget {
+  const _RankedBreakdownRow({
     required this.label,
     required this.value,
     required this.share,
@@ -1243,65 +1915,78 @@ class _BreakdownRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(icon, color: color),
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.altSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(14),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  Text(
-                    '${(share * 100).toStringAsFixed(0)}% of spending',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.mutedInk,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              formatMoney(value),
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            value: share.clamp(0, 1),
-            minHeight: 8,
-            color: color,
-            backgroundColor: AppColors.altSurface,
+            child: Icon(icon, color: color),
           ),
-        ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(999),
+                  child: LinearProgressIndicator(
+                    value: share.clamp(0, 1),
+                    minHeight: 8,
+                    color: color,
+                    backgroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                formatMoney(value),
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${(share * 100).round()}%',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.mutedInk,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
 
-class _SourceBreakdownRow extends StatelessWidget {
-  const _SourceBreakdownRow({
+class _SourceRankedRow extends StatelessWidget {
+  const _SourceRankedRow({
     required this.item,
     required this.source,
   });
@@ -1311,56 +1996,95 @@ class _SourceBreakdownRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Row(
-          children: [
-            ProviderLogo(
-              sourceName: source.name,
-              sourceType: source.type,
-              fallbackIcon: source.icon,
-              fallbackColor: source.color,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    source.name,
-                    style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
-                  ),
-                  Text(
-                    '${source.type.label} • ${(item.share * 100).toStringAsFixed(0)}%',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.mutedInk,
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              formatMoney(item.value),
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: LinearProgressIndicator(
-            value: item.share.clamp(0, 1),
-            minHeight: 8,
-            color: item.color,
-            backgroundColor: AppColors.altSurface,
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.altSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Row(
+        children: [
+          ProviderLogo(
+            sourceName: source.name,
+            sourceType: source.type,
+            fallbackIcon: source.icon,
+            fallbackColor: source.color,
           ),
-        ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  source.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  source.type.label,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppColors.mutedInk,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                formatMoney(item.value),
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      fontWeight: FontWeight.w900,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${(item.share * 100).round()}%',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.mutedInk,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyCardMessage extends StatelessWidget {
+  const _EmptyCardMessage({
+    required this.message,
+  });
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.altSurface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Text(
+        message,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppColors.mutedInk,
+              fontWeight: FontWeight.w600,
+            ),
+      ),
     );
   }
 }
@@ -1425,87 +2149,86 @@ class _FilterSheet extends StatelessWidget {
         color: AppColors.card,
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: EdgeInsets.fromLTRB(
-        20,
-        8,
-        20,
-        24 + MediaQuery.of(context).padding.bottom,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Choose Range',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w900,
-                  ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Switch between quick financial views.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: AppColors.mutedInk,
-                  ),
-            ),
-            const SizedBox(height: 18),
-            for (final filter in SummaryFilter.values)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(18),
-                  onTap: () {
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Choose Range',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w900,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Filter your dashboard using a date range.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppColors.mutedInk,
+                ),
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              for (final filter in SummaryFilter.values)
+                _RangeChip(
+                  label: filter.label,
+                  selected: selected == filter,
+                  onTap: () async {
+                    if (filter == SummaryFilter.custom) {
+                      Navigator.of(context).pop(filter);
+                      await onCustomRangeTap();
+                      return;
+                    }
                     Navigator.of(context).pop(filter);
                   },
-                  child: Ink(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    decoration: BoxDecoration(
-                      color: selected == filter
-                          ? AppColors.primary.withValues(alpha: 0.08)
-                          : AppColors.altSurface,
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(
-                        color: selected == filter
-                            ? AppColors.primary.withValues(alpha: 0.24)
-                            : AppColors.line,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          selected == filter
-                              ? Icons.check_circle_rounded
-                              : Icons.circle_outlined,
-                          color: selected == filter
-                              ? AppColors.primary
-                              : AppColors.mutedInk,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            filter.title,
-                            style:
-                                Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                          ),
-                        ),
-                        if (filter == SummaryFilter.custom)
-                          TextButton(
-                            onPressed: () async {
-                              Navigator.of(context).pop();
-                              await onCustomRangeTap();
-                            },
-                            child: const Text('Pick'),
-                          ),
-                      ],
-                    ),
-                  ),
                 ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RangeChip extends StatelessWidget {
+  const _RangeChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected
+              ? AppColors.primary.withValues(alpha: 0.08)
+              : AppColors.altSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.24)
+                : AppColors.line,
+          ),
+        ),
+        child: Text(
+          label,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: selected ? AppColors.primary : AppColors.ink,
+                fontWeight: FontWeight.w800,
               ),
-          ],
         ),
       ),
     );
@@ -1526,12 +2249,18 @@ class _TargetDialog extends StatefulWidget {
 }
 
 class _TargetDialogState extends State<_TargetDialog> {
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initialValue == null || widget.initialValue == 0
-        ? ''
-        : widget.initialValue!.round().toString(),
-  );
+  late final TextEditingController _controller;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.initialValue == null
+          ? ''
+          : widget.initialValue!.round().toString(),
+    );
+  }
 
   @override
   void dispose() {
@@ -1556,8 +2285,7 @@ class _TargetDialogState extends State<_TargetDialog> {
           const SizedBox(height: 16),
           TextField(
             controller: _controller,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
               labelText: 'Target amount',
               prefixText: '৳ ',
@@ -1601,18 +2329,19 @@ class _EmptyChartState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 180,
+      height: 200,
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: AppColors.mutedInk, size: 34),
+            Icon(icon, color: AppColors.mutedInk, size: 36),
             const SizedBox(height: 10),
             Text(
               message,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: AppColors.mutedInk,
+                    height: 1.4,
                   ),
             ),
           ],
@@ -1632,13 +2361,14 @@ class _DonutChartPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rect = Offset.zero & size;
-    final strokeWidth = 16.0;
+    const strokeWidth = 18.0;
     final total = items.fold(0.0, (sum, item) => sum + item.value);
     final basePaint = Paint()
       ..color = AppColors.altSurface
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
+
     canvas.drawArc(
       rect.deflate(strokeWidth / 2),
       -math.pi / 2,
@@ -1658,7 +2388,7 @@ class _DonutChartPainter extends CustomPainter {
       canvas.drawArc(
         rect.deflate(strokeWidth / 2),
         start,
-        items.length == 1 ? sweep : math.max(sweep - 0.04, 0.0),
+        items.length == 1 ? sweep : math.max(sweep - 0.05, 0.0),
         false,
         paint,
       );
@@ -1671,7 +2401,6 @@ class _DonutChartPainter extends CustomPainter {
     return oldDelegate.items != items;
   }
 }
-
 
 class _BreakdownEntry {
   const _BreakdownEntry({
@@ -1689,10 +2418,12 @@ class _BreakdownEntry {
 
 class _DailySpendBar {
   const _DailySpendBar({
+    required this.date,
     required this.label,
     required this.amount,
   });
 
+  final DateTime date;
   final String label;
   final double amount;
 }
@@ -1769,13 +2500,15 @@ bool _countsForDashboardIncome(ActivityItem activity) {
 }
 
 Color _targetTone(double progress) {
-  if (progress >= 1.0) return AppColors.danger;
+  if (progress > 1.0) return AppColors.primaryDark;
+  if (progress >= 0.9) return AppColors.danger;
   if (progress >= 0.7) return AppColors.warning;
   return AppColors.positive;
 }
 
 String _targetMessage(double progress) {
-  if (progress >= 1.0) return 'Target exceeded';
+  if (progress > 1.0) return 'Target exceeded';
+  if (progress >= 0.9) return 'Almost reached';
   if (progress >= 0.7) return 'Approaching target';
   return 'Within target';
 }

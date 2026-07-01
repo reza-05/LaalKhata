@@ -234,17 +234,26 @@ String formatActivityDate(DateTime occurredAt) {
   final yesterday = today.subtract(const Duration(days: 1));
   final dateOnly = DateTime(localTime.year, localTime.month, localTime.day);
 
-  final hourStr = localTime.hour.toString().padLeft(2, '0');
-  final minuteStr = localTime.minute.toString().padLeft(2, '0');
-  final timeStr = '$hourStr:$minuteStr';
-
   if (dateOnly == today) {
-    return 'Today, $timeStr';
+    return 'Today';
   } else if (dateOnly == yesterday) {
-    return 'Yesterday, $timeStr';
+    return 'Yesterday';
   } else {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     final monthStr = months[localTime.month - 1];
-    return '${localTime.day} $monthStr ${localTime.year}, $timeStr';
+    return '${localTime.day} $monthStr ${localTime.year}';
   }
 }
