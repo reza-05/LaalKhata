@@ -5,6 +5,7 @@ class LedgerDocument {
     required this.monthlyTargets,
     required this.smsTransactionCutoffAt,
     required this.updatedAt,
+    this.extra = const <String, dynamic>{},
   });
 
   final List<LedgerSourceRecord> sources;
@@ -12,6 +13,7 @@ class LedgerDocument {
   final Map<String, double> monthlyTargets;
   final DateTime? smsTransactionCutoffAt;
   final DateTime updatedAt;
+  final Map<String, dynamic> extra;
 
   factory LedgerDocument.fromJson(Map<String, dynamic> json) {
     final sources = _mapList(json['sources'], LedgerSourceRecord.fromJson);
@@ -26,11 +28,18 @@ class LedgerDocument {
           DateTime.tryParse('${json['smsTransactionCutoffAt']}'),
       updatedAt: DateTime.tryParse('${json['updatedAt']}')?.toUtc() ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      extra: Map<String, dynamic>.from(json)
+        ..remove('sources')
+        ..remove('activities')
+        ..remove('monthlyTargets')
+        ..remove('smsTransactionCutoffAt')
+        ..remove('updatedAt'),
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
+      ...extra,
       'sources': sources.map((source) => source.toJson()).toList(),
       'activities': activities.map((activity) => activity.toJson()).toList(),
       'monthlyTargets': monthlyTargets.map(
@@ -62,7 +71,8 @@ class LedgerDocument {
     if (value is! Map) return const {};
     return value.map<String, double>((key, target) {
       return MapEntry('$key', (target as num?)?.toDouble() ?? 0);
-    })..removeWhere((key, target) => key.trim().isEmpty || target <= 0);
+    })
+      ..removeWhere((key, target) => key.trim().isEmpty || target <= 0);
   }
 }
 

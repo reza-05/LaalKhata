@@ -26,6 +26,7 @@ import '../../../ledger/presentation/widgets/summary_tab.dart';
 import '../../../ledger/presentation/widgets/add_transaction_tab.dart';
 import '../../../ledger/presentation/widgets/sources_tab.dart';
 import '../../../ledger/presentation/widgets/transactions_page.dart';
+import '../../../lists/presentation/widgets/lists_page.dart';
 import '../../../sms/presentation/widgets/detected_messages_sheet.dart';
 
 class PhaseOneHomePage extends ConsumerStatefulWidget {
@@ -61,6 +62,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
   DateTime _ledgerUpdatedAt =
       DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
   final Map<String, double> _monthlyTargets = {};
+  final List<LedgerList> _lists = [];
   Future<void> _persistQueue = Future.value();
   Timer? _smsPollTimer;
   Timer? _cloudSyncRetryTimer;
@@ -244,8 +246,14 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       _MoreTab(
         sources: _sources,
         activities: _activities,
+        lists: _lists,
         onConfirmSuggestion: _confirmSmsSuggestion,
         cloudSyncAvailable: _cloudSyncAvailable,
+        onCreateList: _createList,
+        onRenameList: _renameList,
+        onDeleteList: _deleteList,
+        onAddListItem: _addListItem,
+        onDeleteListItem: _deleteListItem,
         onSignOut: () => ref.read(authControllerProvider.notifier).signOut(),
       ),
     ];
@@ -1134,6 +1142,103 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     await _showCloudSyncWarningIfNeeded();
   }
 
+  Future<LedgerList?> _createList(String title) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return null;
+
+    final now = DateTime.now().toUtc();
+    final list = LedgerList(
+      id: 'list_${DateTime.now().microsecondsSinceEpoch}',
+      title: trimmed,
+      createdAt: now,
+      updatedAt: now,
+      items: const [],
+    );
+
+    setState(() {
+      _touchLedger(now);
+      _lists.insert(0, list);
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+    return list;
+  }
+
+  Future<void> _renameList(LedgerList list, String title) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) return;
+    final index = _lists.indexWhere((entry) => entry.id == list.id);
+    if (index == -1) return;
+
+    final now = DateTime.now().toUtc();
+    setState(() {
+      _touchLedger(now);
+      _lists[index] = _lists[index].copyWith(
+        title: trimmed,
+        updatedAt: now,
+      );
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+  }
+
+  Future<void> _deleteList(LedgerList list) async {
+    setState(() {
+      _touchLedger();
+      _lists.removeWhere((entry) => entry.id == list.id);
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+  }
+
+  Future<LedgerListItem?> _addListItem(
+    LedgerList list,
+    String title,
+    double amount,
+  ) async {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty || amount <= 0) return null;
+    final index = _lists.indexWhere((entry) => entry.id == list.id);
+    if (index == -1) return null;
+
+    final now = DateTime.now().toUtc();
+    final item = LedgerListItem(
+      id: 'item_${DateTime.now().microsecondsSinceEpoch}',
+      title: trimmed,
+      amount: amount,
+      createdAt: now,
+    );
+
+    setState(() {
+      _touchLedger(now);
+      final current = _lists[index];
+      _lists[index] = current.copyWith(
+        updatedAt: now,
+        items: [item, ...current.items],
+      );
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+    return item;
+  }
+
+  Future<void> _deleteListItem(LedgerList list, LedgerListItem item) async {
+    final index = _lists.indexWhere((entry) => entry.id == list.id);
+    if (index == -1) return;
+
+    final now = DateTime.now().toUtc();
+    setState(() {
+      _touchLedger(now);
+      final current = _lists[index];
+      _lists[index] = current.copyWith(
+        updatedAt: now,
+        items: current.items.where((entry) => entry.id != item.id).toList(),
+      );
+    });
+    await _persistLedger();
+    await _showCloudSyncWarningIfNeeded();
+  }
+
   void _navigateToTransactionsPage(List<ActivityItem> activities) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -1152,6 +1257,7 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       'monthlyTargets': _monthlyTargets.map(
         (key, value) => MapEntry(key, value),
       ),
+      'lists': _lists.map((list) => list.toJson()).toList(),
       'smsTransactionCutoffAt': _smsTransactionCutoffAt?.toIso8601String(),
       'updatedAt': _ledgerUpdatedAt.toIso8601String(),
     };
@@ -1176,10 +1282,15 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
     _ledgerUpdatedAt = documentUpdatedAt;
     final monthlyTargets = (json['monthlyTargets'] is Map)
         ? (json['monthlyTargets'] as Map).map<String, double>(
-            (key, value) =>
-                MapEntry('$key', (value as num?)?.toDouble() ?? 0),
+            (key, value) => MapEntry('$key', (value as num?)?.toDouble() ?? 0),
           )
-        : const <String, double>{};
+        : <String, double>{};
+    final lists = (json['lists'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(LedgerList.fromJson)
+            .whereType<LedgerList>()
+            .toList() ??
+        <LedgerList>[];
 
     var removedDuplicates = false;
     if (sources != null && sources.isNotEmpty) {
@@ -1215,6 +1326,9 @@ class _PhaseOneHomePageState extends ConsumerState<PhaseOneHomePage>
       ..clear()
       ..addAll(monthlyTargets
         ..removeWhere((key, value) => key.trim().isEmpty || value <= 0));
+    _lists
+      ..clear()
+      ..addAll(lists..sort((a, b) => b.updatedAt.compareTo(a.updatedAt)));
     return removedDuplicates;
   }
 }
@@ -1223,16 +1337,33 @@ class _MoreTab extends ConsumerWidget {
   const _MoreTab({
     required this.sources,
     required this.activities,
+    required this.lists,
     required this.onConfirmSuggestion,
     required this.cloudSyncAvailable,
+    required this.onCreateList,
+    required this.onRenameList,
+    required this.onDeleteList,
+    required this.onAddListItem,
+    required this.onDeleteListItem,
     required this.onSignOut,
   });
 
   final List<MoneySource> sources;
   final List<ActivityItem> activities;
+  final List<LedgerList> lists;
   final Future<bool> Function(SmsTransactionSuggestion suggestion)
       onConfirmSuggestion;
   final bool cloudSyncAvailable;
+  final Future<LedgerList?> Function(String title) onCreateList;
+  final Future<void> Function(LedgerList list, String title) onRenameList;
+  final Future<void> Function(LedgerList list) onDeleteList;
+  final Future<LedgerListItem?> Function(
+    LedgerList list,
+    String title,
+    double amount,
+  ) onAddListItem;
+  final Future<void> Function(LedgerList list, LedgerListItem item)
+      onDeleteListItem;
   final VoidCallback onSignOut;
 
   @override
@@ -1268,9 +1399,9 @@ class _MoreTab extends ConsumerWidget {
               ),
               _MoreTile(
                 icon: Icons.checklist_rounded,
-                title: 'Projects & Lists',
-                subtitle: 'Milestones, Bazar lists, hobbies, and notes',
-                onTap: () => _showComingSoon(context, 'Projects & Lists'),
+                title: 'Lists',
+                subtitle: 'Plan purchases, shopping, and item totals',
+                onTap: () => _showLists(context),
               ),
               _MoreTile(
                 icon: Icons.receipt_long_outlined,
@@ -1343,6 +1474,21 @@ class _MoreTab extends ConsumerWidget {
       builder: (context) => _ProfileSheet(
         email: user?.email ?? '',
         metadata: user?.userMetadata ?? const {},
+      ),
+    );
+  }
+
+  void _showLists(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ListsPage(
+          initialLists: lists,
+          onCreateList: onCreateList,
+          onRenameList: onRenameList,
+          onDeleteList: onDeleteList,
+          onAddItem: onAddListItem,
+          onDeleteItem: onDeleteListItem,
+        ),
       ),
     );
   }

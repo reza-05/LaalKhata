@@ -24,7 +24,7 @@ enum EntryType {
   transfer('Transfer'),
   lent('Lent'),
   borrowed('Borrowed'),
-  project('Project/List Item'),
+  project('List Item'),
   balanceAdjustment('Balance Adjustment');
 
   const EntryType(this.label);
@@ -160,6 +160,149 @@ class ActivityItem {
       occurredAt: occurredAt,
       category: json['category'] as String? ?? 'Others',
       type: json['type'] as String? ?? 'expense',
+    );
+  }
+}
+
+enum LedgerListStatus {
+  draft('Draft'),
+  checkedOut('Checked Out'),
+  archived('Archived');
+
+  const LedgerListStatus(this.label);
+
+  final String label;
+}
+
+class LedgerListItem {
+  const LedgerListItem({
+    required this.id,
+    required this.title,
+    required this.amount,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String title;
+  final double amount;
+  final DateTime createdAt;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'amount': amount,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  static LedgerListItem? fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String?;
+    final title = json['title'] as String?;
+    final amount = (json['amount'] as num?)?.toDouble();
+    final createdAt = DateTime.tryParse('${json['createdAt']}');
+    if (id == null ||
+        id.trim().isEmpty ||
+        title == null ||
+        title.trim().isEmpty ||
+        amount == null ||
+        createdAt == null) {
+      return null;
+    }
+
+    return LedgerListItem(
+      id: id,
+      title: title.trim(),
+      amount: amount,
+      createdAt: createdAt,
+    );
+  }
+}
+
+class LedgerList {
+  LedgerList({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+    this.status = LedgerListStatus.draft,
+    List<LedgerListItem>? items,
+  }) : items = items ?? <LedgerListItem>[];
+
+  final String id;
+  String title;
+  DateTime createdAt;
+  DateTime updatedAt;
+  LedgerListStatus status;
+  final List<LedgerListItem> items;
+
+  double get totalAmount =>
+      items.fold(0.0, (sum, item) => sum + item.amount.abs());
+
+  int get itemCount => items.length;
+
+  LedgerList copyWith({
+    String? title,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    LedgerListStatus? status,
+    List<LedgerListItem>? items,
+  }) {
+    return LedgerList(
+      id: id,
+      title: title ?? this.title,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      status: status ?? this.status,
+      items: items ?? List<LedgerListItem>.from(this.items),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'title': title,
+      'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
+      'status': status.name,
+      'items': items.map((item) => item.toJson()).toList(),
+    };
+  }
+
+  static LedgerList? fromJson(Map<String, dynamic> json) {
+    final id = json['id'] as String?;
+    final title = json['title'] as String?;
+    final createdAt = DateTime.tryParse('${json['createdAt']}');
+    final updatedAt = DateTime.tryParse('${json['updatedAt']}');
+    if (id == null ||
+        id.trim().isEmpty ||
+        title == null ||
+        title.trim().isEmpty ||
+        createdAt == null ||
+        updatedAt == null) {
+      return null;
+    }
+
+    final status = LedgerListStatus.values.firstWhere(
+      (value) => value.name == json['status'],
+      orElse: () => LedgerListStatus.draft,
+    );
+    final items = (json['items'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .map(LedgerListItem.fromJson)
+            .whereType<LedgerListItem>()
+            .toList() ??
+        <LedgerListItem>[];
+
+    items.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    return LedgerList(
+      id: id,
+      title: title.trim(),
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      status: status,
+      items: items,
     );
   }
 }

@@ -464,17 +464,17 @@ class _AddTransactionTabState extends State<AddTransactionTab>
 
   Widget _buildProjectField() {
     return _LabeledField(
-      label: 'Project/List',
+      label: 'List',
       child: TextFormField(
         controller: _projectController,
         textInputAction: TextInputAction.next,
         decoration: const InputDecoration(
-          hintText: 'Robot build, Bazar list, Team fund...',
+          hintText: 'Bazar list, Robot parts, Team shopping...',
           contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         ),
         validator: (value) {
           if ((value ?? '').trim().isEmpty) {
-            return 'Please enter a project or list name.';
+            return 'Please enter a list name.';
           }
           return null;
         },
@@ -1309,7 +1309,7 @@ class _AddTransactionTabState extends State<AddTransactionTab>
       case EntryType.borrowed:
         return 'Borrowed';
       case EntryType.project:
-        return 'Project';
+        return 'List';
       case EntryType.balanceAdjustment:
         return 'Balance';
     }
