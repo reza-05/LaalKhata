@@ -603,29 +603,29 @@ class _MetricCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 34,
-              height: 34,
+              width: 36,
+              height: 36,
               decoration: BoxDecoration(
                 color: item.tone.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: Icon(item.icon, color: item.tone, size: 18),
+              child: Icon(item.icon, color: item.tone, size: 20),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Text(
               item.title,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: AppColors.mutedInk,
                     fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                    fontSize: 14,
                   ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
               item.value,
               maxLines: 1,
@@ -633,17 +633,17 @@ class _MetricCard extends StatelessWidget {
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     color: AppColors.ink,
                     fontWeight: FontWeight.w900,
-                    fontSize: 20,
+                    fontSize: 22,
                   ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             Text(
               item.subtitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: AppColors.mutedInk,
-                    fontSize: 12,
+                    fontSize: 13,
                     height: 1.2,
                   ),
             ),
@@ -744,25 +744,20 @@ class _CompactTargetProgressBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double pct = progress * 100;
     Color statusColor;
     String statusLabel = '';
     IconData statusIcon;
 
     if (progress >= 1.0) {
-      statusColor = const Color(0xFF991B1B); // Dark Red
+      statusColor = AppColors.danger; // Red only when reaching/exceeding 100%
       statusLabel = 'Target Exceeded';
       statusIcon = Icons.cancel_outlined;
-    } else if (pct >= 90) {
-      statusColor = AppColors.danger; // Red
-      statusLabel = 'Almost Reached';
-      statusIcon = Icons.error_outline_rounded;
-    } else if (pct >= 70) {
-      statusColor = const Color(0xFFD97706); // Amber
+    } else if (progress >= 0.7) {
+      statusColor = AppColors.warning; // Amber for warning threshold
       statusLabel = 'Approaching Limit';
       statusIcon = Icons.warning_amber_rounded;
     } else {
-      statusColor = AppColors.positive; // Green
+      statusColor = AppColors.positive; // Green when within target
       statusLabel = 'Within Target';
       statusIcon = Icons.check_circle_outline_rounded;
     }
@@ -772,187 +767,187 @@ class _CompactTargetProgressBanner extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.card,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: AppColors.line), // Uniform outer border to avoid BorderRadius crash
+        border: Border.all(color: AppColors.line), // Uniform outer border
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(18),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Premium colored left accent strip
-              Container(
+        child: Stack(
+          children: [
+            // Premium colored left accent strip (completely robust using Positioned in Stack)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              child: Container(
                 width: 5,
                 color: statusColor,
               ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(21, 16, 16, 16), // Left padding is 21 to clear the 5px accent strip
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Monthly Target ($monthLabel)',
-                              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                    color: AppColors.mutedInk,
-                                  ),
-                            ),
-                          ),
-                          GestureDetector(
-                            onTap: onEditTarget,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Edit',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: AppColors.primary,
-                                        fontWeight: FontWeight.w900,
-                                      ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(
-                                  Icons.edit_rounded,
-                                  size: 12,
-                                  color: AppColors.primary,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Used amount info
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Used',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.mutedInk,
-                                        fontSize: 11,
-                                      ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  formatMoney(spent),
-                                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                        fontWeight: FontWeight.w900,
-                                        color: AppColors.ink,
-                                        fontSize: 18,
-                                      ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'of ${formatMoney(targetAmount)}',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: AppColors.mutedInk,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Remaining amount info
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Remaining',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        fontWeight: FontWeight.w800,
-                                        color: AppColors.mutedInk,
-                                        fontSize: 11,
-                                      ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  formatMoney(math.max(0.0, targetAmount - spent)),
-                                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                        fontWeight: FontWeight.w900,
-                                        color: AppColors.ink,
-                                        fontSize: 18,
-                                      ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  spent > targetAmount ? 'Exceeded Limit' : 'Under target cap',
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                        color: AppColors.mutedInk,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Percentage and Status info
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                '${(progress * 100).clamp(0, 999).round()}%',
-                                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                      fontWeight: FontWeight.w900,
-                                      color: statusColor,
-                                      fontSize: 22,
-                                    ),
+                      Expanded(
+                        child: Text(
+                          'Monthly Target ($monthLabel)',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w900,
+                                color: AppColors.mutedInk,
                               ),
-                              const SizedBox(height: 3),
-                              Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(statusIcon, color: statusColor, size: 12),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    statusLabel,
-                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                          color: statusColor,
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 11,
-                                        ),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: onEditTarget,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Edit',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppColors.primary,
+                                    fontWeight: FontWeight.w900,
                                   ),
-                                ],
+                            ),
+                            const SizedBox(width: 4),
+                            const Icon(
+                              Icons.edit_rounded,
+                              size: 12,
+                              color: AppColors.primary,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      // Used amount info
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Used',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.mutedInk,
+                                    fontSize: 11,
+                                  ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              formatMoney(spent),
+                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                    color: AppColors.ink,
+                                    fontSize: 18,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              'of ${formatMoney(targetAmount)}',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppColors.mutedInk,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Remaining amount info
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Remaining',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.mutedInk,
+                                    fontSize: 11,
+                                  ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              formatMoney(math.max(0.0, targetAmount - spent)),
+                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                    color: AppColors.ink,
+                                    fontSize: 18,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              spent > targetAmount ? 'Exceeded Limit' : 'Under target cap',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppColors.mutedInk,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Percentage and Status info
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            '${(progress * 100).clamp(0, 999).round()}%',
+                            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.w900,
+                                  color: statusColor,
+                                  fontSize: 22,
+                                ),
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(statusIcon, color: statusColor, size: 12),
+                              const SizedBox(width: 4),
+                              Text(
+                                statusLabel,
+                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: statusColor,
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 11,
+                                    ),
                               ),
                             ],
                           ),
                         ],
                       ),
-                      const SizedBox(height: 16),
-                      TweenAnimationBuilder<double>(
-                        duration: const Duration(milliseconds: 600),
-                        curve: Curves.easeOutCubic,
-                        tween: Tween<double>(begin: 0.0, end: progress.clamp(0.0, 1.0)),
-                        builder: (context, animValue, child) {
-                          return ClipRRect(
-                            borderRadius: BorderRadius.circular(999),
-                            child: LinearProgressIndicator(
-                              minHeight: 8, // 8px thick progress bar
-                              value: animValue,
-                              color: statusColor,
-                              backgroundColor: AppColors.altSurface,
-                            ),
-                          );
-                        },
-                      ),
                     ],
                   ),
-                ),
+                  const SizedBox(height: 16),
+                  TweenAnimationBuilder<double>(
+                    duration: const Duration(milliseconds: 600),
+                    curve: Curves.easeOutCubic,
+                    tween: Tween<double>(begin: 0.0, end: progress.clamp(0.0, 1.0)),
+                    builder: (context, animValue, child) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          minHeight: 8, // 8px thick progress bar
+                          value: animValue,
+                          color: statusColor,
+                          backgroundColor: AppColors.altSurface,
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1774,15 +1769,13 @@ bool _countsForDashboardIncome(ActivityItem activity) {
 }
 
 Color _targetTone(double progress) {
-  if (progress >= 1) return AppColors.danger;
-  if (progress >= 0.9) return const Color(0xFFF97316);
+  if (progress >= 1.0) return AppColors.danger;
   if (progress >= 0.7) return AppColors.warning;
   return AppColors.positive;
 }
 
 String _targetMessage(double progress) {
-  if (progress >= 1) return 'Target exceeded';
-  if (progress >= 0.9) return 'Almost reached';
+  if (progress >= 1.0) return 'Target exceeded';
   if (progress >= 0.7) return 'Approaching target';
   return 'Within target';
 }
